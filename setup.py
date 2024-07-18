@@ -6,7 +6,7 @@ setup(
     description='A package for identifying and repairing double-strand breaks in DNA',
     author='Simone Puccio',
     author_email='simone.puccio@humanitasresearch.it',
-    url='https://github.com/yourusername/helixbusters',
+    url='https://github.com/luglilab/helixbusters',
     packages=find_packages(),
     install_requires=[
         # List of dependencies
@@ -16,5 +16,5 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
     ],
-    python_requires='>=3.6',
+    python_requires='>=3.11',
 )
