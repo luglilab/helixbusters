@@ -9,12 +9,14 @@ setup(
     url='https://github.com/luglilab/helixbusters',
     packages=find_packages(),
     install_requires=[
-        # List of dependencies
+        "pandas==2.2.2",
+        "numpy==2.0.0",
+        ""
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
     ],
-    python_requires='>=3.11',
+    python_requires='>=3.12',
 )
