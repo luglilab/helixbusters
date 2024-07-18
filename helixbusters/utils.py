@@ -1,33 +1,49 @@
 import pandas as pd
+import os
 
 
-def read_excel_column(file_path, sheet_name, column_name):
+def read_excel_column(file_path):
     """
-    Reads a specified column from an Excel file.
+    Reads a specified column from an Excel or CSV file and performs checks.
 
     Args:
-        file_path (str): Path to the Excel file.
-        sheet_name (str): Name of the sheet to read from.
-        column_name (str): Name of the column to extract.
+        file_path (str): Path to the file (Excel or CSV).
 
     Returns:
-        list: Values from the specified column.
+        pandas.DataFrame: DataFrame containing the file data if successful, otherwise an empty DataFrame.
     """
+    required_columns = ['Sample', 'Replicate', 'Group', 'PathReadF', 'SampleBarcode1']
+    check_columns = ['Sample','PathReadF', 'SampleBarcode1']
+
     try:
-        # Read the Excel file
-        df = pd.read_excel(file_path, sheet_name=sheet_name)
+        # Determine file type based on extension
+        _, file_extension = os.path.splitext(file_path)
 
-        # Check if the column exists
-        if column_name not in df.columns:
-            raise ValueError(f"Column '{column_name}' not found in the sheet '{sheet_name}'.")
+        if file_extension.lower() == '.xlsx' or file_extension.lower() == '.xls':
+            # Read Excel file
+            df = pd.read_excel(file_path, header=0)
+        elif file_extension.lower() == '.csv':
+            # Read CSV file
+            df = pd.read_csv(file_path, header=0)
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}. Only .xlsx, .xls, and .csv are supported.")
 
-        # Extract the column
-        column_data = df[column_name].tolist()
+        # Check if all required columns are present
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"The following required columns are missing: {', '.join(missing_columns)}")
 
-        return column_data
+        # Check if the DataFrame has exactly 5 columns
+        if len(df.columns) != 5:
+            raise ValueError(f"The file does not have exactly 5 columns. Found {len(df.columns)} columns.")
+
+        # Check if required columns are unique
+        for col in check_columns:
+            if not df[col].is_unique:
+                raise ValueError(f"The values in column '{col}' are not unique.")
+
+        return df
 
     except Exception as e:
         print(f"An error occurred: {e}")
-        return []
-
-# Additional utility functions can be added here
+        return pd.DataFrame()
