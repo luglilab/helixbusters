@@ -1,0 +1,5 @@
+Sample,Replicate,Group,PathReadF,SampleBarcode1
+Sample1,R1,Acute,/pippo/plutop/ciccio1.fastq.gz,CTCACACG
+Sample2,R2,Acute,/pippo/plutop/ciccio2.fastq.gz,CTCTCACG
+Sample3,R1,Chronic,/pippo/plutop/ciccio3.fastq.gz,CTCGCACG
+Sample4,R2,Chronic,/pippo/plutop/ciccio4.fastq.gz,CTCCCACG
