@@ -1,5 +1,7 @@
-from helixbusters.utils import read_excel_column, scan_for_matches_from_df
+from helixbusters.utils import read_excel_column
 import os
+import subprocess
+import sys
 import gzip
 from Bio import SeqIO
 
@@ -82,7 +84,6 @@ class Helixbusters:
 
             # Paths for intermediate files
             r1_fa = os.path.join(output_dir, f'{sample}_r1.fa')
-            r1_filtered_fa = os.path.join(output_dir, f'{sample}_r1_filtered.fa')
             r1_oneline_fq = os.path.join(output_dir, f'{sample}_r1oneline.fq')
             r2_oneline_fq = os.path.join(output_dir, f'{sample}_r2oneline.fq') if path_read_r2 else None
 
@@ -95,11 +96,7 @@ class Helixbusters:
             if path_read_r2:
                 self.process_fastq_file(path_read_r2, None, r2_oneline_fq)
 
-            # Step 4: Perform the pattern filtering on the processed r1 FASTA file
-            print(f"Filtering reads for sample {sample} using pattern from OutputString.")
-            scan_for_matches_from_df(r1_fa, output_string, r1_filtered_fa)
-
-            print(f"Done processing and filtering sample {sample} FASTA files.")
+            print(f"Done processing sample {sample} FASTQ files.")
 
     def process_fastq_file(self, input_path, output_fa_path=None, output_oneline_fq_path=None):
         """
@@ -129,3 +126,19 @@ class Helixbusters:
             with open(output_oneline_fq_path, 'w') as fq_out:
                 for record in sorted_records:
                     fq_out.write(record.format('fastq'))
+
+    def run_command(self, command):
+        """
+        Utility method to run shell commands.
+
+        Args:
+            command (str): Command to run as a string.
+
+        Returns:
+            None
+        """
+        try:
+            subprocess.run(command, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error occurred while running command: {command}\n{e}")
+            raise

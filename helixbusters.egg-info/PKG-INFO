@@ -1,0 +1,15 @@
+Metadata-Version: 2.1
+Name: helixbusters
+Version: 0.1.0
+Summary: A package for identifying and repairing double-strand breaks in DNA
+Home-page: https://github.com/luglilab/helixbusters
+Author: Simone Puccio
+Author-email: simone.puccio@humanitasresearch.it
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.12
+Requires-Dist: pandas==2.2.2
+Requires-Dist: numpy==2.0.0
+Requires-Dist: xlrd>=2.0.1
+Requires-Dist: biopython>=1.79
