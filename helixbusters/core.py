@@ -1,4 +1,4 @@
-from helixbusters.utils import read_excel_column, scan_for_matches_from_df
+from helixbusters.utils import read_excel_column
 import os
 import gzip
 from Bio import SeqIO
@@ -45,87 +45,153 @@ class Helixbusters:
         df['OutputString'] = ''
 
         for index, row in df.iterrows():
-            # Extract fields from the row
             f1 = row['Sample']  # First field (Sample)
             f2 = row['Sample'].replace('_', '').replace('/', '')  # Remove underscores and slashes
             f3 = row['Group']  # Third field (Group)
             f6 = row['SampleBarcode1']  # Fifth field (SampleBarcode1)
 
-            # Create the output string
             output_string = f'^ 8...8 {f3}[{self.mismatch},0,0] 1...1000 $'
-
-            # Add the output string to the new column
             df.at[index, 'OutputString'] = output_string
 
-        # Return the modified DataFrame with the new column
         return df
 
-    def decompress_and_process_fastq(self, updated_df, output_dir):
+    def reverse_complement(self, seq):
         """
-        Decompress and process the FASTQ files using information from the DataFrame (updated_df),
-        utilizing Python libraries for file processing.
+        Returns the reverse complement of the DNA sequence.
+        """
+        complement = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
+        return ''.join(complement[base] for base in seq[::-1])
 
-        Args:
-            updated_df (pd.DataFrame): DataFrame containing sample information and file paths.
-            output_dir (str): Path to the output directory.
+    def fastq_to_fasta_file(self, input_fastq_gz, adapter_sequence, output_fasta_file, min_rest_length=20):
         """
-        # Ensure the output directory exists
+        Process a FASTQ file, filter sequences by adapter and length, and output in FASTA format.
+        """
+        with gzip.open(input_fastq_gz, 'rt') as fastq_file, open(output_fasta_file, 'w') as fasta_file:
+            while True:
+                header = fastq_file.readline().strip()
+                if not header:
+                    break  # End of file
+                sequence = fastq_file.readline().strip()
+                fastq_file.readline()  # Skip '+'
+                fastq_file.readline()  # Skip quality scores
+
+                header_parts = header.split(' ')
+                read_id = header_parts[0][1:]  # Remove '@'
+
+                if adapter_sequence not in sequence:
+                    continue  # Skip if adapter not found
+
+                first_chunk = sequence[:8]
+                second_chunk = self.reverse_complement(sequence[8:16])
+                rest_of_sequence = sequence[16:]
+
+                if len(rest_of_sequence) < min_rest_length:
+                    continue  # Skip if too short
+
+                fasta_header = f">{read_id}:[1,{len(sequence)}]"
+                formatted_sequence = f"{first_chunk} {second_chunk} {rest_of_sequence}"
+                fasta_file.write(f"{fasta_header}\n{formatted_sequence}\n")
+
+    def decompress_and_process_fastq(self, updated_df, output_dir, min_rest_length=20):
+        """
+        Decompress and process the FASTQ files using the DataFrame (updated_df),
+        and update the DataFrame with paths to the created FASTA files.
+        """
         os.makedirs(output_dir, exist_ok=True)
+        updated_df['FASTA_Path'] = ''
 
-        # Loop through each row of the DataFrame
         for index, row in updated_df.iterrows():
-            # Extract required information for each sample from the DataFrame
             sample = row['Sample']
             path_read_f = row['PathReadF']  # Path to the r1 fastq file
-            path_read_r2 = row.get('PathReadR2')  # Assuming PathReadR2 is in the DataFrame for paired-end data
-            output_string = row['OutputString']  # This is the output string generated earlier
+            sample_barcode1 = row['SampleBarcode1']  # Adapter sequence
+            output_string = row['OutputString']
 
-            # Paths for intermediate files
             r1_fa = os.path.join(output_dir, f'{sample}_r1.fa')
-            r1_filtered_fa = os.path.join(output_dir, f'{sample}_r1_filtered.fa')
-            r1_oneline_fq = os.path.join(output_dir, f'{sample}_r1oneline.fq')
-            r2_oneline_fq = os.path.join(output_dir, f'{sample}_r2oneline.fq') if path_read_r2 else None
-
             print(f"Processing sample {sample}...")
 
-            # Process r1 (forward read)
-            self.process_fastq_file(path_read_f, r1_fa, r1_oneline_fq)
-
-            # If paired-end (r2 available), process r2 as well
-            if path_read_r2:
-                self.process_fastq_file(path_read_r2, None, r2_oneline_fq)
-
-            # Step 4: Perform the pattern filtering on the processed r1 FASTA file
-            print(f"Filtering reads for sample {sample} using pattern from OutputString.")
-            scan_for_matches_from_df(r1_fa, output_string, r1_filtered_fa)
+            self.fastq_to_fasta_file(path_read_f, sample_barcode1, r1_fa, min_rest_length)
+            updated_df.at[index, 'FASTA_Path'] = r1_fa
 
             print(f"Done processing and filtering sample {sample} FASTA files.")
 
-    def process_fastq_file(self, input_path, output_fa_path=None, output_oneline_fq_path=None):
+        return updated_df
+
+    def prepare_for_mapping(self, updated_df, output_dir):
         """
-        Process a single FASTQ file. Decompress it and perform transformations.
-        If output paths are provided, save the transformed files in FASTA and oneline formats.
-
-        Args:
-            input_path (str): Path to the input FASTQ file.
-            output_fa_path (str): Path to the output FASTA file (optional).
-            output_oneline_fq_path (str): Path to the sorted one-line FASTQ file (optional).
+        This function processes the FASTA files and joins them with corresponding FASTQ files.
         """
-        # Open the gzipped FASTQ file and read sequences
-        with gzip.open(input_path, 'rt') as handle:
-            records = list(SeqIO.parse(handle, 'fastq'))
+        print('Parse the FASTA files, filtering and trimming ...')
+        os.makedirs(output_dir, exist_ok=True)
 
-        # If output_fa_path is provided, write to FASTA format
-        if output_fa_path:
-            with open(output_fa_path, 'w') as fa_out:
-                for record in records:
-                    # Writing to FASTA with only the first two lines of each record
-                    fa_out.write(f'>{record.id}\n{str(record.seq)}\n')
+        for index, row in updated_df.iterrows():
+            sample = row['Sample']
+            fasta_path = row['FASTA_Path']
 
-        # If output_oneline_fq_path is provided, write the FASTQ file in oneline format and sort by sequence ID
-        if output_oneline_fq_path:
-            sorted_records = sorted(records, key=lambda rec: rec.id)  # Sort by sequence ID
+            r1_output_path = os.path.join(output_dir, f'{sample}_r1.2b.aln.fq')
+            r2_output_path = os.path.join(output_dir, f'{sample}_r2.2b.aln.fq') if 'r2oneline.fq' in updated_df.columns else None
 
-            with open(output_oneline_fq_path, 'w') as fq_out:
-                for record in sorted_records:
-                    fq_out.write(record.format('fastq'))
+            with open(fasta_path, 'r') as fasta_file:
+                fasta_lines = fasta_file.readlines()
+
+            id_genomic = {}
+            for i in range(0, len(fasta_lines), 2):
+                header = fasta_lines[i].strip().split(':')[:7]
+                sequence = fasta_lines[i + 1].strip()
+                id_genomic['@'.join(header)] = sequence
+
+            id_genomic_sorted = dict(sorted(id_genomic.items()))
+            r1oneline_path = os.path.join(output_dir, 'r1oneline.fq')
+            r1_sequences = self.load_fastq_as_dict(r1oneline_path)
+
+            r1_joined = self.join_sequences(id_genomic_sorted, r1_sequences, is_paired_end=False)
+            with open(r1_output_path, 'w') as r1_output_file:
+                for line in r1_joined:
+                    r1_output_file.write(line + '\n')
+
+            if r2_output_path:
+                r2oneline_path = os.path.join(output_dir, 'r2oneline.fq')
+                r2_sequences = self.load_fastq_as_dict(r2oneline_path)
+
+                r2_joined = self.join_sequences(id_genomic_sorted, r2_sequences, is_paired_end=True)
+                with open(r2_output_path, 'w') as r2_output_file:
+                    for line in r2_joined:
+                        r2_output_file.write(line + '\n')
+
+        print('Done! Ready to be aligned to the reference genome!')
+
+    def load_fastq_as_dict(self, fastq_file_path):
+        """
+        Load a FASTQ file into a dictionary with sequence IDs as keys and sequences as values.
+        """
+        sequences = {}
+        with open(fastq_file_path, 'r') as fastq_file:
+            while True:
+                header = fastq_file.readline().strip()
+                if not header:
+                    break  # End of file
+                sequence = fastq_file.readline().strip()
+                fastq_file.readline()  # Skip '+'
+                quality = fastq_file.readline().strip()
+
+                sequence_id = header.split()[0]
+                sequences[sequence_id] = (sequence, quality)
+
+        return sequences
+
+    def join_sequences(self, id_genomic_sorted, fastq_sequences, is_paired_end=False):
+        """
+        Join the sorted genomic IDs with sequences from the fastq_sequences dictionary.
+        """
+        joined_sequences = []
+
+        for seq_id, genomic_sequence in id_genomic_sorted.items():
+            if seq_id in fastq_sequences:
+                original_sequence, quality = fastq_sequences[seq_id]
+
+                if is_paired_end:
+                    joined_sequences.append(f"{seq_id}\n{genomic_sequence}")
+                else:
+                    trimmed_sequence = genomic_sequence[-len(original_sequence):]
+                    joined_sequences.append(f"{seq_id}\n{original_sequence}\n+\n{trimmed_sequence}")
+
+        return joined_sequences
