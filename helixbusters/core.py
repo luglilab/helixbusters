@@ -1,23 +1,23 @@
 from helixbusters.utils import (
     read_excel_column,
     run_cutadapt_single_end,
-    run_cutadapt_paired_end,
-    download_and_index_genome_with_gff_biopython,
-    map_reads_with_bwa,
-    read_fastq
+    run_cutadapt_paired_end
 )
 import os
+import subprocess
+import pysam
 
 class Helixbusters:
-    def __init__(self, samplesheet, species, mismatch):
+    def __init__(self, samplesheet, species, mismatch, genome_index):
         self.samplesheet = samplesheet
-        self.species = species
+        self.species = species.lower()
         self.mismatch = mismatch
+        self.genome_index = genome_index  # Now this is a path to the genome index
         self.modality = None
         self.infofile = None
 
         # Validate species attribute
-        if species.lower() not in ['mouse', 'human']:
+        if self.species not in ['mouse', 'human']:
             raise ValueError("Species must be 'mouse' or 'human'.")
 
         # Validate mismatch attribute
@@ -81,49 +81,53 @@ class Helixbusters:
             else:
                 raise ValueError("Unsupported modality: must be 'single-end' or 'paired-end'.")
 
-    def download_and_index_genome(self, base_dir):
+    def run_bwa_mapping(self, quality=20, threads=10):
         """
-        Downloads the human or mouse genome reference based on the species provided.
-        Indexes the genome using BWA.
-        """
-        if self.species == 'human':
-            genome = 'hg38'
-        elif self.species == 'mouse':
-            genome = 'mm10'
-        else:
-            raise ValueError(f"Unsupported species: {self.species}")
-
-        print(f"Downloading and indexing genome for {self.species}: {genome}")
-        download_and_index_genome_with_gff_biopython(genome, base_dir)
-
-    def map_reads(self, genome_fa, output_dir):
-        """
-        Maps the trimmed reads of all samples in the samplesheet to the reference genome using BWA.
+        Run BWA mapping and Samtools sorting for each sample.
 
         Args:
-            genome_fa (str): Path to the reference genome FASTA file.
-            output_dir (str): Directory where the SAM/BAM output will be saved.
+            quality (int): Minimum mapping quality.
+            threads (int): Number of threads to use.
         """
         if self.infofile is None or self.modality is None:
-            raise ValueError("No sample information or modality found. Please ensure to run read_column_from_excel first.")
+            raise ValueError(
+                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
 
         for _, row in self.infofile.iterrows():
-            sample_name = row['Sample']
+            sample = row['Sample']
             output_path = row['OutputPath']
+            aux_path = output_path  # Assuming aux files are in the same folder as output
 
-            # Get the trimmed reads for mapping
+            # Paths for single-end or paired-end reads
+            read1 = row['PathReadForward']
+            read2 = row.get('PathReadReverse', None)
+
+            # Run BWA and Samtools
+            bam_all = os.path.join(output_path, f"{sample}.all.bam")
+            bam_filtered = os.path.join(output_path, f"{sample}.q{quality}.bam")
+
             if self.modality == 'single-end':
-                trimmed_reads = os.path.join(output_path, 'trimmed.fastq.gz')
-                print(f"Mapping single-end reads for sample: {sample_name}")
-                map_reads_with_bwa(trimmed_reads, genome_fa, output_dir, paired_end=False)
-
+                # Single-end command
+                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {read1} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
             elif self.modality == 'paired-end':
-                trimmed_reads_r1 = os.path.join(output_path, 'trimmed_R1.fastq.gz')
-                trimmed_reads_r2 = os.path.join(output_path, 'trimmed_R2.fastq.gz')
-                print(f"Mapping paired-end reads for sample: {sample_name}")
-                map_reads_with_bwa((trimmed_reads_r1, trimmed_reads_r2), genome_fa, output_dir, paired_end=True)
-
+                # Paired-end command
+                read2 = row['PathReadReverse']
+                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {read1} {read2} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
             else:
-                raise ValueError("Unsupported modality: must be 'single-end' or 'paired-end'.")
+                raise ValueError(f"Unsupported modality: {self.modality}")
 
-        print(f"All samples have been mapped to the reference genome.")
+            # Run BWA and Samtools sorting
+            print(f"Running BWA and sorting for sample {sample}...")
+            subprocess.run(bwa_cmd, shell=True, check=True)
+
+            # Filter BAM by quality and index BAM files
+            print(f"Filtering BAM file for sample {sample} with minimum quality {quality}...")
+            view_cmd = f"samtools view --threads {threads} -b -q {quality} {bam_all} > {bam_filtered}"
+            subprocess.run(view_cmd, shell=True, check=True)
+
+            # Index both BAM files (all and filtered)
+            print(f"Indexing BAM files for sample {sample}...")
+            pysam.index(bam_all)
+            pysam.index(bam_filtered)
+
+            print(f"BWA mapping and BAM processing complete for sample {sample}.")

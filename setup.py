@@ -14,7 +14,8 @@ setup(
         "xlrd>=2.0.1",
         "biopython>=1.79",
         "cutadapt==4.9",
-        "requests==2.22.0"
+        "requests==2.22.0",
+        "pysam"
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
