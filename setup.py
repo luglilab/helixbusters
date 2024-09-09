@@ -12,7 +12,9 @@ setup(
         "pandas==2.2.2",
         "numpy==2.0.0",
         "xlrd>=2.0.1",
-        "biopython>=1.79"
+        "biopython>=1.79",
+        "cutadapt==4.9",
+        "requests==2.22.0"
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
