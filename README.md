@@ -10,16 +10,4 @@ helix.trim_reads("/home/lugli/spuccio/Projects/SP036_Lise/Dev/TestPipe/")
 helix.run_bwa_mapping(quality=20, threads=10)
 
 
-helix.download_and_index_genome("/home/lugli/spuccio/Projects/SP036_Lise/Dev/TestPipe/")
-helix.map_reads(genome_fa="/home/lugli/spuccio/Projects/SP036_Lise/Dev/TestPipe/hg38/hg38.fa", output_dir="/home/lugli/spuccio/Projects/SP036_Lise/Dev/TestPipe/")
-
-
-AAGAAATGCGTGTGAGGTGATCTCGGCAGACTGCAAGCTCCACCTCCCAGGTTCATGCCATTCTCCTGCCTCAGCCTCCCAGGTAGCTGGGACTACAATCC
-
-AAGAAATGCGTGTGAGGTGATCTCGGCAGACTGCAAGCTCCACCTCCCAGGTTCATGCCATTCTCCTGCCTCAGCCTCCCAGGTAGCTGGGACTACAATCC
-
-TTCATGCC 
-
-CTACAATC
-
-CGTGTGAG
+helix.infofile['BamFilteredPath'][0]

@@ -68,7 +68,7 @@ def run_cutadapt_single_end(read_path, output_path, adapter_seq=None, min_len=20
     #min_len = int(min_len)
 
     # Base command for cutadapt
-    cutadapt_cmd = ["cutadapt", "-m", '10', "-j", '10']
+    cutadapt_cmd = ["cutadapt", "-m", '10', "-j", '10','--report','minimal']
 
     # Add adapter sequence if provided
     if adapter_seq:
