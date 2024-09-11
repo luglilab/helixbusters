@@ -1,0 +1,7 @@
+Sample,Replicate,Group,PathReadForward,SampleBarcodeForward
+Sample1,R1,Baseline,/home/lugli/spuccio/Projects/SP036_Lise/RITM0026254_BLISS_VL_EG/raw_fastq/SPE_013_LIB_S1_L002_R1_001.fastq.gz,CGTGTGAG
+Sample2,R2,Baseline,/home/lugli/spuccio/Projects/SP036_Lise/RITM0026254_BLISS_VL_EG/raw_fastq/SPE_014_LIB_S2_L002_R1_001.fastq.gz,GACACGAG
+Sample3,R3,Baseline,/home/lugli/spuccio/Projects/SP036_Lise/RITM0026254_BLISS_VL_EG/raw_fastq/SPE_015_LIB_S3_L001_R1_001.fastq.gz,TAGGTGAG
+Sample4,R1,Time2H,/home/lugli/spuccio/Projects/SP036_Lise/RITM0026254_BLISS_VL_EG/raw_fastq/SPE_016_LIB_S4_L001_R1_001.fastq.gz,ATGTGGAG
+Sample5,R2,Time2H,/home/lugli/spuccio/Projects/SP036_Lise/RITM0026254_BLISS_VL_EG/raw_fastq/SPE_017_LIB_S5_L001_R1_001.fastq.gz,CTAACTCA
+Sample6,R3,Time2H,/home/lugli/spuccio/Projects/SP036_Lise/RITM0026254_BLISS_VL_EG/raw_fastq/SPE_018_LIB_S6_L001_R1_001.fastq.gz,GAATCCGA

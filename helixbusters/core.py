@@ -1,18 +1,19 @@
 from helixbusters.utils import (
     read_excel_column,
-    run_cutadapt_single_end,
-    run_cutadapt_paired_end
+    extract_umi
 )
 import os
 import subprocess
 import pysam
+import pandas as pd
+
 
 class Helixbusters:
     def __init__(self, samplesheet, species, mismatch, genome_index):
         self.samplesheet = samplesheet
         self.species = species.lower()
         self.mismatch = mismatch
-        self.genome_index = genome_index  # Now this is a path to the genome index
+        self.genome_index = genome_index  # Path to the genome index
         self.modality = None
         self.infofile = None
 
@@ -51,105 +52,36 @@ class Helixbusters:
 
         self.infofile['OutputPath'] = output_paths
 
-    def trim_reads(self, min_len=20, threads=10):
+    def process_infofile(self, umi_length=8, threads=1):
         """
-        Trim reads based on the modality determined from the samplesheet.
-        Calls the appropriate function for single-end or paired-end reads.
-        Uses the 'OutputPath' column from self.infofile for the output directory.
-        Fetches adapter sequences from 'SampleBarcodeForward' and 'SampleBarcodeReverse' (for paired-end).
-        Adds the trimmed read paths to new columns 'PathReadForwardTrimmed' (and 'PathReadReverseTrimmed' for paired-end).
-        """
-        if self.infofile is None or self.modality is None:
-            raise ValueError(
-                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
-
-        for index, row in self.infofile.iterrows():
-            output_path = row['OutputPath']
-
-            if self.modality == 'single-end':
-                read_path = row['PathReadForward']
-                adapter_seq = row['SampleBarcodeForward']
-                trimmed_read_path = os.path.join(output_path, "trimmed.fastq.gz")  # Fixed trimmed filename
-
-                print(f"Trimming single-end reads for sample: {row['Sample']} to {output_path}")
-                run_cutadapt_single_end(read_path, output_path, adapter_seq, min_len, threads)
-
-                # Store the path of the trimmed reads in self.infofile
-                self.infofile.at[index, 'PathReadForwardTrimmed'] = trimmed_read_path
-
-            elif self.modality == 'paired-end':
-                read1_path = row['PathReadForward']
-                read2_path = row['PathReadReverse']
-                adapter_seq1 = row['SampleBarcodeForward']
-                adapter_seq2 = row['SampleBarcodeReverse']
-
-                trimmed_read1_path = os.path.join(output_path, "trimmed_R1.fastq.gz")  # Fixed trimmed filename for R1
-                trimmed_read2_path = os.path.join(output_path, "trimmed_R2.fastq.gz")  # Fixed trimmed filename for R2
-
-                print(f"Trimming paired-end reads for sample: {row['Sample']} to {output_path}")
-                run_cutadapt_paired_end(read1_path, read2_path, output_path, adapter_seq1, adapter_seq2, min_len,
-                                        threads)
-
-                # Store the paths of the trimmed reads in self.infofile
-                self.infofile.at[index, 'PathReadForwardTrimmed'] = trimmed_read1_path
-                self.infofile.at[index, 'PathReadReverseTrimmed'] = trimmed_read2_path
-
-            else:
-                raise ValueError("Unsupported modality: must be 'single-end' or 'paired-end'.")
-
-    def run_bwa_mapping(self, quality=20, threads=10):
-        """
-        Run BWA mapping and Samtools sorting for each sample using the trimmed reads.
-        Adds the paths of BAM files ('BamAllPath' and 'BamFilteredPath') to self.infofile.
+        Iterates over the rows of self.infofile, performing UMI extraction for each sample.
 
         Args:
-            quality (int): Minimum mapping quality.
-            threads (int): Number of threads to use.
+        - umi_length (int): Length of the UMI sequence. Defaults to 8.
+        - threads (int): Number of threads to use for UMI extraction. Defaults to 1.
         """
-        if self.infofile is None or self.modality is None:
-            raise ValueError(
-                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
-
         for index, row in self.infofile.iterrows():
-            sample = row['Sample']
+            fastq1_path = row['PathReadForward']
+            fastq2_path = row.get('PathReadReverse', None)  # Use PathReadReverse if available (for paired-end)
+            barcode_forward = row['SampleBarcodeForward']  # Now using SampleBarcodeForward instead of AdapterForward
+            barcode_reverse = row.get('SampleBarcodeReverse',
+                                      None)  # Now using SampleBarcodeReverse instead of AdapterReverse
             output_path = row['OutputPath']
-            aux_path = output_path  # Assuming aux files are in the same folder as output
 
-            # Paths for single-end or paired-end reads
-            read1 = row['PathReadForwardTrimmed']
-            read2 = row.get('PathReadReverseTrimmed', None)
+            # Ensure output directory exists
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
 
-            # Paths for BAM files
-            bam_all = os.path.join(output_path, f"{sample}.all.bam")
-            bam_filtered = os.path.join(output_path, f"{sample}.q{quality}.bam")
+            print(f"Processing sample {row['Sample']} (row {index + 1}/{len(self.infofile)})")
 
-            if self.modality == 'single-end':
-                # Single-end command, using PathReadForwardTrimmed
-                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {read1} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
-            elif self.modality == 'paired-end':
-                # Paired-end command, using PathReadForwardTrimmed and PathReadReverseTrimmed
-                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {read1} {read2} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
-            else:
-                raise ValueError(f"Unsupported modality: {self.modality}")
-
-            # Run BWA and Samtools sorting
-            print(f"Running BWA and sorting for sample {sample}...")
-            subprocess.run(bwa_cmd, shell=True, check=True)
-
-            # Filter BAM by quality and index BAM files
-            print(f"Filtering BAM file for sample {sample} with minimum quality {quality}...")
-            view_cmd = f"samtools view --threads {threads} -b -q {quality} {bam_all} > {bam_filtered}"
-            subprocess.run(view_cmd, shell=True, check=True)
-
-            # Index both BAM files (all and filtered)
-            print(f"Indexing BAM files for sample {sample}...")
-            pysam.index(bam_all)
-            pysam.index(bam_filtered)
-
-            print(f"BWA mapping and BAM processing complete for sample {sample}.")
-
-            # Store the paths of the BAM files in self.infofile
-            self.infofile.at[index, 'BamAllPath'] = bam_all
-            self.infofile.at[index, 'BamFilteredPath'] = bam_filtered
-
+            # Call the extract_umi function from helixbusters.utils with the appropriate arguments
+            extract_umi(
+                fastq1_path=fastq1_path,
+                fastq2_path=fastq2_path,
+                adapter1=barcode_forward,
+                adapter2=barcode_reverse,
+                output_path=output_path,
+                umi_length=umi_length,
+                threads=threads
+            )
 
