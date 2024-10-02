@@ -1,5 +1,3 @@
-Sure! Here's the `README.md` in Markdown format:
-
 ```markdown
 # Helixbusters
 
