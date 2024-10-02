@@ -1,6 +1,9 @@
 from helixbusters.utils import (
     read_excel_column,
-    extract_umi
+    extract_umi_parallel,
+    run_cutadapt_single_end,
+    run_cutadapt_paired_end,
+    process_bam_and_generate_umi_outputs
 )
 import os
 import subprocess
@@ -54,18 +57,17 @@ class Helixbusters:
 
     def process_infofile(self, umi_length=8, threads=1):
         """
-        Iterates over the rows of self.infofile, performing UMI extraction for each sample.
+        Iterates over the rows of self.infofile, performing UMI extraction and trimming for each sample.
 
         Args:
         - umi_length (int): Length of the UMI sequence. Defaults to 8.
-        - threads (int): Number of threads to use for UMI extraction. Defaults to 1.
+        - threads (int): Number of threads to use for UMI extraction and trimming. Defaults to 1.
         """
         for index, row in self.infofile.iterrows():
             fastq1_path = row['PathReadForward']
             fastq2_path = row.get('PathReadReverse', None)  # Use PathReadReverse if available (for paired-end)
-            barcode_forward = row['SampleBarcodeForward']  # Now using SampleBarcodeForward instead of AdapterForward
-            barcode_reverse = row.get('SampleBarcodeReverse',
-                                      None)  # Now using SampleBarcodeReverse instead of AdapterReverse
+            barcode_forward = row['SampleBarcodeForward']  # SampleBarcodeForward used for trimming
+            barcode_reverse = row.get('SampleBarcodeReverse', None)  # For paired-end data
             output_path = row['OutputPath']
 
             # Ensure output directory exists
@@ -74,14 +76,132 @@ class Helixbusters:
 
             print(f"Processing sample {row['Sample']} (row {index + 1}/{len(self.infofile)})")
 
-            # Call the extract_umi function from helixbusters.utils with the appropriate arguments
-            extract_umi(
+            # Step 1: UMI extraction
+            extract_umi_parallel(
                 fastq1_path=fastq1_path,
                 fastq2_path=fastq2_path,
                 adapter1=barcode_forward,
                 adapter2=barcode_reverse,
                 output_path=output_path,
                 umi_length=umi_length,
-                threads=threads
+                threads=threads,
+                sample_barcode=barcode_forward  # Trimming will use SampleBarcodeForward
             )
 
+            # Step 2: Post-processing trimming using cutadapt based on modality
+            if self.modality == 'single-end':
+                trimmed_r1_path = os.path.join(output_path, "trimmed.fastq.gz")
+                run_cutadapt_single_end(
+                    read_path=os.path.join(output_path, "final_output.fastq.gz"),
+                    output_path=output_path,
+                    adapter_seq=barcode_forward,
+                    threads=threads
+                )
+                self.infofile.at[index, 'PathReadForwardTrimmed'] = trimmed_r1_path
+            elif self.modality == 'paired-end':
+                trimmed_r1_path = os.path.join(output_path, "trimmed_R1.fastq.gz")
+                trimmed_r2_path = os.path.join(output_path, "trimmed_R2.fastq.gz")
+                run_cutadapt_paired_end(
+                    read1_path=os.path.join(output_path, "final_output.fastq.gz"),
+                    read2_path=os.path.join(output_path, "final_output_R2.fastq.gz"),
+                    output_path=output_path,
+                    adapter_seq1=barcode_forward,
+                    adapter_seq2=barcode_reverse,
+                    threads=threads
+                )
+                self.infofile.at[index, 'PathReadForwardTrimmed'] = trimmed_r1_path
+                self.infofile.at[index, 'PathReadReverseTrimmed'] = trimmed_r2_path
+
+    def run_bwa_mapping(self, quality=20, threads=10):
+        """
+        Run BWA mapping and Samtools sorting for each sample using the trimmed reads.
+        Adds the paths of BAM files ('BamAllPath' and 'BamFilteredPath') to self.infofile.
+
+        Args:
+            quality (int): Minimum mapping quality.
+            threads (int): Number of threads to use.
+        """
+        if self.infofile is None or self.modality is None:
+            raise ValueError(
+                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
+
+        for index, row in self.infofile.iterrows():
+            sample = row['Sample']
+            output_path = row['OutputPath']
+            aux_path = output_path  # Assuming aux files are in the same folder as output
+
+            # Paths for BAM files
+            bam_all = os.path.join(output_path, f"{sample}.all.bam")
+            bam_filtered = os.path.join(output_path, f"{sample}.q{quality}.bam")
+
+            if self.modality == 'single-end':
+                # Single-end mode: using trimmed.fastq.gz
+                trimmed_r1_path = os.path.join(output_path, "trimmed.fastq.gz")
+                if not os.path.exists(trimmed_r1_path):
+                    raise FileNotFoundError(f"Trimmed FASTQ file not found: {trimmed_r1_path}")
+
+                # Single-end command, using the trimmed.fastq.gz file
+                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {trimmed_r1_path} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
+
+            elif self.modality == 'paired-end':
+                # Paired-end mode: using trimmed_R1.fastq.gz and trimmed_R2.fastq.gz
+                trimmed_r1_path = os.path.join(output_path, "trimmed_R1.fastq.gz")
+                trimmed_r2_path = os.path.join(output_path, "trimmed_R2.fastq.gz")
+
+                if not os.path.exists(trimmed_r1_path) or not os.path.exists(trimmed_r2_path):
+                    raise FileNotFoundError(f"Trimmed FASTQ files not found: {trimmed_r1_path}, {trimmed_r2_path}")
+
+                # Paired-end command, using the trimmed_R1.fastq.gz and trimmed_R2.fastq.gz files
+                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {trimmed_r1_path} {trimmed_r2_path} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
+
+            else:
+                raise ValueError(f"Unsupported modality: {self.modality}")
+
+            # Run BWA and Samtools sorting
+            print(f"Running BWA and sorting for sample {sample}...")
+            subprocess.run(bwa_cmd, shell=True, check=True)
+
+            # Filter BAM by quality and index BAM files
+            print(f"Filtering BAM file for sample {sample} with minimum quality {quality}...")
+            view_cmd = f"samtools view --threads {threads} -b -q {quality} {bam_all} > {bam_filtered}"
+            subprocess.run(view_cmd, shell=True, check=True)
+
+            # Index both BAM files (all and filtered)
+            print(f"Indexing BAM files for sample {sample}...")
+            pysam.index(bam_all)
+            pysam.index(bam_filtered)
+
+            print(f"BWA mapping and BAM processing complete for sample {sample}.")
+
+            # Store the paths of the BAM files in self.infofile
+            self.infofile.at[index, 'BamAllPath'] = bam_all
+            self.infofile.at[index, 'BamFilteredPath'] = bam_filtered
+
+    def generate_umi_output_for_samples(self):
+        """
+        Generates UMI output files for all samples based on their .q20.bam files.
+        This method processes each BAM file in the infofile and generates:
+        1. Chromosome-Location-Strand-UMI-PCR.txt
+        2. Chromosome-Location-UMI-Count.bed
+        """
+        for index, row in self.infofile.iterrows():
+            sample = row['Sample']
+            bam_filtered_path = row['BamFilteredPath']  # Path to the .q20.bam file
+
+            if not bam_filtered_path or not os.path.exists(bam_filtered_path):
+                print(f"Warning: BAM file not found for sample {sample}. Skipping...")
+                continue
+
+            # Define the output file paths
+            output_file_umi_pcr = os.path.join(row['OutputPath'], f"{sample}_Chromosome-Location-Strand-UMI-PCR.txt")
+            output_file_umi_count = os.path.join(row['OutputPath'], f"{sample}_Chromosome-Location-UMI-Count.bed")
+
+            # Call the utility function to generate UMI outputs
+            print(f"Generating UMI output files for sample {sample}...")
+            process_bam_and_generate_umi_outputs(bam_filtered_path, output_file_umi_pcr, output_file_umi_count)
+
+            # Optionally, store the paths to the generated files in the infofile
+            self.infofile.at[index, 'UMI_PCR_Output'] = output_file_umi_pcr
+            self.infofile.at[index, 'UMI_Count_Output'] = output_file_umi_count
+
+        print("UMI output generation completed for all samples.")
