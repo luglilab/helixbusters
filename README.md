@@ -109,5 +109,4 @@ The pipeline generates several outputs for each sample:
 ## License
 
 This project is licensed under the MIT License.
-```
 
