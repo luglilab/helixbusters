@@ -5,6 +5,7 @@ import shutil
 import gzip
 from collections import defaultdict
 import pysam
+import matplotlib.pyplot as plt
 
 def read_excel_column(file_path):
     """
@@ -389,3 +390,36 @@ def process_bam_and_generate_umi_outputs(input_bam, output_file_umi_pcr, output_
                 file2.write(f"{chrom}\t{start}\t{end}\t{umi_count}\n")
 
         print(f"Processed {input_bam} and generated the UMI output files.")
+
+def plot_alignment_quality(bam_file, output_plot_path):
+    """
+    Generate a plot for the distribution of alignment quality from a BAM file.
+
+    Args:
+        bam_file (str): Path to the input BAM file.
+        output_plot_path (str): Path where the plot will be saved.
+
+    Returns:
+        None
+    """
+    # Open the BAM file
+    alignment_qualities = []
+
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        for read in bam.fetch():
+            if not read.is_unmapped:
+                alignment_qualities.append(read.mapping_quality)
+
+    # Create the plot for alignment quality distribution
+    plt.figure(figsize=(10, 6))
+    plt.hist(alignment_qualities, bins=50, color='blue', alpha=0.7)
+    plt.title('Distribution of Alignment Quality')
+    plt.xlabel('Mapping Quality')
+    plt.ylabel('Frequency')
+    plt.grid(True)
+
+    # Save the plot to a file
+    plt.savefig(output_plot_path)
+    plt.close()
+
+    print(f"Plot saved to {output_plot_path}")

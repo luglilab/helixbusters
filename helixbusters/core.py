@@ -3,7 +3,8 @@ from helixbusters.utils import (
     extract_umi_parallel,
     run_cutadapt_single_end,
     run_cutadapt_paired_end,
-    process_bam_and_generate_umi_outputs
+    process_bam_and_generate_umi_outputs,
+    plot_alignment_quality
 )
 import os
 import subprocess
@@ -177,6 +178,71 @@ class Helixbusters:
             self.infofile.at[index, 'BamAllPath'] = bam_all
             self.infofile.at[index, 'BamFilteredPath'] = bam_filtered
 
+    def run_bowtie2_mapping(self, quality=20, threads=10):
+        """
+        Run Bowtie2 mapping and Samtools sorting for each sample using the trimmed reads.
+        Adds the paths of BAM files ('BamAllPath' and 'BamFilteredPath') to self.infofile.
+
+        Args:
+            quality (int): Minimum mapping quality.
+            threads (int): Number of threads to use.
+        """
+        if self.infofile is None or self.modality is None:
+            raise ValueError(
+                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
+
+        for index, row in self.infofile.iterrows():
+            sample = row['Sample']
+            output_path = row['OutputPath']
+            aux_path = output_path  # Assuming aux files are in the same folder as output
+
+            # Paths for BAM files
+            bam_all = os.path.join(output_path, f"{sample}.all.bam")
+            bam_filtered = os.path.join(output_path, f"{sample}.q{quality}.bam")
+
+            if self.modality == 'single-end':
+                # Single-end mode: using trimmed.fastq.gz
+                trimmed_r1_path = os.path.join(output_path, "trimmed.fastq.gz")
+                if not os.path.exists(trimmed_r1_path):
+                    raise FileNotFoundError(f"Trimmed FASTQ file not found: {trimmed_r1_path}")
+
+                # Single-end command, using the trimmed.fastq.gz file
+                bowtie2_cmd = f"bowtie2 -x {self.genome_index} -U {trimmed_r1_path} -p {threads} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
+
+            elif self.modality == 'paired-end':
+                # Paired-end mode: using trimmed_R1.fastq.gz and trimmed_R2.fastq.gz
+                trimmed_r1_path = os.path.join(output_path, "trimmed_R1.fastq.gz")
+                trimmed_r2_path = os.path.join(output_path, "trimmed_R2.fastq.gz")
+
+                if not os.path.exists(trimmed_r1_path) or not os.path.exists(trimmed_r2_path):
+                    raise FileNotFoundError(f"Trimmed FASTQ files not found: {trimmed_r1_path}, {trimmed_r2_path}")
+
+                # Paired-end command, using the trimmed_R1.fastq.gz and trimmed_R2.fastq.gz files
+                bowtie2_cmd = f"bowtie2 -x {self.genome_index} -1 {trimmed_r1_path} -2 {trimmed_r2_path} -p {threads} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
+
+            else:
+                raise ValueError(f"Unsupported modality: {self.modality}")
+
+            # Run Bowtie2 and Samtools sorting
+            print(f"Running Bowtie2 and sorting for sample {sample}...")
+            subprocess.run(bowtie2_cmd, shell=True, check=True)
+
+            # Filter BAM by quality and index BAM files
+            print(f"Filtering BAM file for sample {sample} with minimum quality {quality}...")
+            view_cmd = f"samtools view --threads {threads} -b -q {quality} {bam_all} > {bam_filtered}"
+            subprocess.run(view_cmd, shell=True, check=True)
+
+            # Index both BAM files (all and filtered)
+            print(f"Indexing BAM files for sample {sample}...")
+            pysam.index(bam_all)
+            pysam.index(bam_filtered)
+
+            print(f"Bowtie2 mapping and BAM processing complete for sample {sample}.")
+
+            # Store the paths of the BAM files in self.infofile
+            self.infofile.at[index, 'BamAllPath'] = bam_all
+            self.infofile.at[index, 'BamFilteredPath'] = bam_filtered
+
     def generate_umi_output_for_samples(self):
         """
         Generates UMI output files for all samples based on their .q20.bam files.
@@ -205,3 +271,24 @@ class Helixbusters:
             self.infofile.at[index, 'UMI_Count_Output'] = output_file_umi_count
 
         print("UMI output generation completed for all samples.")
+
+    def generate_alignment_quality_plots(self):
+        """
+        Generate alignment quality distribution plots for all samples in self.infofile.
+        The plots are saved in the respective output directories of each sample.
+        """
+        for index, row in self.infofile.iterrows():
+            sample = row['Sample']
+            bam_file = row['BamFilteredPath']  # Assuming we are using the filtered BAM file
+
+            if not bam_file or not os.path.exists(bam_file):
+                print(f"Warning: BAM file not found for sample {sample}. Skipping...")
+                continue
+
+            output_plot_path = os.path.join(row['OutputPath'], f"{sample}_alignment_quality_distribution.png")
+
+            # Generate the alignment quality plot for this sample
+            print(f"Generating alignment quality plot for sample {sample}...")
+            plot_alignment_quality(bam_file, output_plot_path)
+
+        print("Alignment quality plots generated for all samples.")
