@@ -1,0 +1,14 @@
+name: helixbusters
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.12
+  - pandas
+  - bwa
+  - samtools
+  - fastp
+  - umi_tools
+  - bowtie2
+prefix: /home/lugli/spuccio/anaconda3/envs/helixbusters
