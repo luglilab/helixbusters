@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "references": {
+    "hg19": {
+      "bwa_index": "/references/hg19/bwa/genome",
+      "bowtie2_index": "/references/hg19/bowtie2/genome",
+      "blacklist": {"genome": "hg19", "path": "/references/hg19/hg19-blacklist.v2.bed.gz"}
+    },
+    "hg38": {
+      "bwa_index": "/references/hg38/bwa/genome",
+      "bowtie2_index": "/references/hg38/bowtie2/genome",
+      "blacklist": {"genome": "hg38", "path": "/references/hg38/hg38-blacklist.v2.bed.gz"}
+    },
+    "mm10": {
+      "bwa_index": "/references/mm10/bwa/genome",
+      "bowtie2_index": "/references/mm10/bowtie2/genome",
+      "blacklist": {"genome": "mm10", "path": "/references/mm10/mm10-blacklist.v2.bed.gz"}
+    },
+    "mm39": {
+      "bwa_index": "/references/mm39/bwa/genome",
+      "bowtie2_index": "/references/mm39/bowtie2/genome",
+      "blacklist": {"genome": "mm39", "path": "/references/mm39/mm39.excluderanges.validated.bed.gz"}
+    }
+  }
+}

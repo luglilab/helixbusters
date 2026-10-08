@@ -7,15 +7,26 @@ from helixbusters.utils import (
     plot_alignment_quality
 )
 import os
-import subprocess
-import pysam
 import pandas as pd
+from helixbusters.mapping import map_sample, validate_sample_name
+from helixbusters.genomes import (normalize_genome, genome_species, make_genome_filter,
+                                  load_reference_config)
 
 
 class Helixbusters:
-    def __init__(self, samplesheet, species, mismatch, genome_index):
+    def __init__(self, samplesheet, species=None, mismatch=1, genome_index=None, *,
+                 genome=None, blacklist_bed=None, blacklist_genome=None):
         self.samplesheet = samplesheet
-        self.species = species.lower()
+        self.genome = normalize_genome(genome) if genome is not None else None
+        if species is None and self.genome is not None:
+            species = genome_species(self.genome)
+        self.species = species.lower() if isinstance(species, str) else species
+        if self.genome is not None and self.species != genome_species(self.genome):
+            raise ValueError("Species does not match the selected genome")
+        self.blacklist_bed = blacklist_bed
+        self.blacklist_genome = blacklist_genome
+        make_genome_filter(self.genome, blacklist_bed, blacklist_genome)
+        self.reference_aligner = None
         self.mismatch = mismatch
         self.genome_index = genome_index  # Path to the genome index
         self.modality = None
@@ -28,6 +39,15 @@ class Helixbusters:
         # Validate mismatch attribute
         if not 0 <= mismatch <= 3:
             raise ValueError("Mismatch must be between 0 and 3.")
+
+    @classmethod
+    def from_reference_config(cls, samplesheet, genome, reference_config, *,
+                              aligner="bwa", mismatch=1):
+        """Choose a build and its index/blacklist from a local reference catalog."""
+        reference = load_reference_config(reference_config, genome, aligner)
+        instance = cls(samplesheet, mismatch=mismatch, **reference)
+        instance.reference_aligner = aligner
+        return instance
 
     def read_column_from_excel(self):
         """
@@ -113,162 +133,118 @@ class Helixbusters:
                 self.infofile.at[index, 'PathReadForwardTrimmed'] = trimmed_r1_path
                 self.infofile.at[index, 'PathReadReverseTrimmed'] = trimmed_r2_path
 
-    def run_bwa_mapping(self, quality=20, threads=10):
-        """
-        Run BWA mapping and Samtools sorting for each sample using the trimmed reads.
-        Adds the paths of BAM files ('BamAllPath' and 'BamFilteredPath') to self.infofile.
+    def run_bwa_mapping(self, quality=20, threads=10, **options):
+        """Map trimmed reads with classic BWA-MEM; quality is minimum MAPQ.
 
-        Args:
-            quality (int): Minimum mapping quality.
-            threads (int): Number of threads to use.
+        Additional options: sort_threads, sort_memory, aligner_executable,
+        samtools_executable. See docs/mapping.md for filtering and QC outputs.
         """
-        if self.infofile is None or self.modality is None:
-            raise ValueError(
-                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
+        self._run_mapping("bwa", quality, threads, **options)
 
+    def run_bowtie2_mapping(self, quality=20, threads=10, **options):
+        """Map trimmed reads with Bowtie2 (end-to-end by default).
+
+        bowtie2_mode="local" is an explicit alternative. quality is MAPQ,
+        not the per-base FASTQ quality. Other options match run_bwa_mapping.
+        """
+        self._run_mapping("bowtie2", quality, threads, **options)
+
+    def _run_mapping(self, aligner, quality, threads, **options):
+        if self.reference_aligner is not None and self.reference_aligner != aligner:
+            raise ValueError(f"Reference config selected a {self.reference_aligner} index, not {aligner}")
+        if self.genome_index is None:
+            raise ValueError("A genome_index prefix is required for mapping")
+        if {"genome", "blacklist_bed", "blacklist_genome"} & options.keys():
+            raise ValueError("Configure genome and blacklist on Helixbusters, not on the mapping method")
+        if self.infofile is None or self.modality not in {"single-end", "paired-end"}:
+            raise ValueError("Load sample information and set a valid sequencing modality first")
+        if not {"Sample", "OutputPath"}.issubset(self.infofile.columns):
+            raise ValueError("Sample information must contain Sample and OutputPath")
+        if self.infofile["Sample"].duplicated().any():
+            raise ValueError("Sample names must be unique to prevent output overwrites")
+        jobs = []
+        for index, row in self.infofile.iterrows():
+            sample = row["Sample"]
+            validate_sample_name(sample)
+            output = row["OutputPath"]
+            if pd.isna(output) or not output:
+                raise ValueError(f"Missing OutputPath for sample {sample}")
+            read1 = row.get("PathReadForwardTrimmed")
+            if read1 is None or pd.isna(read1) or not read1:
+                name = "trimmed.fastq.gz" if self.modality == "single-end" else "trimmed_R1.fastq.gz"
+                read1 = os.path.join(output, name)
+            read2 = None
+            if self.modality == "paired-end":
+                read2 = row.get("PathReadReverseTrimmed")
+                if read2 is None or pd.isna(read2) or not read2:
+                    read2 = os.path.join(output, "trimmed_R2.fastq.gz")
+            for path in (read1, read2):
+                if path is not None and not os.path.isfile(path):
+                    raise FileNotFoundError(f"Trimmed FASTQ file not found for sample {sample}: {path}")
+            jobs.append((index, sample, output, read1, read2))
+
+        # All sample FASTQ paths have been checked before the first mapping job.
+        for index, sample, output, read1, read2 in jobs:
+            print(f"Running {aligner} mapping for sample {sample}...")
+            outputs = map_sample(sample, read1, self.genome_index, output,
+                                 read2=read2, aligner=aligner, min_mapq=quality,
+                                 threads=threads, genome=self.genome,
+                                 blacklist_bed=self.blacklist_bed,
+                                 blacklist_genome=self.blacklist_genome, **options)
+            for column, path in outputs.items():
+                self.infofile.at[index, column] = path
+
+    def generate_umi_output_for_samples(self, method="exact", umi_length=8,
+                                        max_distance=1, min_mapq=0,
+                                        five_prime_policy="strict",
+                                        read_selection="single-end"):
+        """
+        Count BLISS molecules from each coordinate-sorted BamFilteredPath.
+
+        Exact grouping is the baseline; directional corrects related UMIs at
+        the same position and strand. Paired-end BAMs require explicit read1
+        or read2 selection according to the library design. Also writes a
+        molecule BED6, stranded site table and deduplication QC JSON.
+        """
+        if self.infofile is None:
+            raise ValueError("Load sample information before generating UMI outputs")
+        required = {"Sample", "OutputPath", "BamFilteredPath"}
+        if not required.issubset(self.infofile.columns):
+            raise ValueError("Sample information must contain Sample, OutputPath and BamFilteredPath")
+        if self.infofile["Sample"].duplicated().any():
+            raise ValueError("Sample names must be unique to prevent output overwrites")
+        # Check all BAM paths before producing any sample outputs.
+        for _, row in self.infofile.iterrows():
+            path = row["BamFilteredPath"]
+            if pd.isna(path) or not path or not os.path.isfile(path):
+                raise FileNotFoundError(f"BAM file not found for sample {row['Sample']}: {path}")
         for index, row in self.infofile.iterrows():
             sample = row['Sample']
-            output_path = row['OutputPath']
-            aux_path = output_path  # Assuming aux files are in the same folder as output
-
-            # Paths for BAM files
-            bam_all = os.path.join(output_path, f"{sample}.all.bam")
-            bam_filtered = os.path.join(output_path, f"{sample}.q{quality}.bam")
-
-            if self.modality == 'single-end':
-                # Single-end mode: using trimmed.fastq.gz
-                trimmed_r1_path = os.path.join(output_path, "trimmed.fastq.gz")
-                if not os.path.exists(trimmed_r1_path):
-                    raise FileNotFoundError(f"Trimmed FASTQ file not found: {trimmed_r1_path}")
-
-                # Single-end command, using the trimmed.fastq.gz file
-                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {trimmed_r1_path} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
-
-            elif self.modality == 'paired-end':
-                # Paired-end mode: using trimmed_R1.fastq.gz and trimmed_R2.fastq.gz
-                trimmed_r1_path = os.path.join(output_path, "trimmed_R1.fastq.gz")
-                trimmed_r2_path = os.path.join(output_path, "trimmed_R2.fastq.gz")
-
-                if not os.path.exists(trimmed_r1_path) or not os.path.exists(trimmed_r2_path):
-                    raise FileNotFoundError(f"Trimmed FASTQ files not found: {trimmed_r1_path}, {trimmed_r2_path}")
-
-                # Paired-end command, using the trimmed_R1.fastq.gz and trimmed_R2.fastq.gz files
-                bwa_cmd = f"bwa mem -v 1 -t {threads} {self.genome_index} {trimmed_r1_path} {trimmed_r2_path} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
-
-            else:
-                raise ValueError(f"Unsupported modality: {self.modality}")
-
-            # Run BWA and Samtools sorting
-            print(f"Running BWA and sorting for sample {sample}...")
-            subprocess.run(bwa_cmd, shell=True, check=True)
-
-            # Filter BAM by quality and index BAM files
-            print(f"Filtering BAM file for sample {sample} with minimum quality {quality}...")
-            view_cmd = f"samtools view --threads {threads} -b -q {quality} {bam_all} > {bam_filtered}"
-            subprocess.run(view_cmd, shell=True, check=True)
-
-            # Index both BAM files (all and filtered)
-            print(f"Indexing BAM files for sample {sample}...")
-            pysam.index(bam_all)
-            pysam.index(bam_filtered)
-
-            print(f"BWA mapping and BAM processing complete for sample {sample}.")
-
-            # Store the paths of the BAM files in self.infofile
-            self.infofile.at[index, 'BamAllPath'] = bam_all
-            self.infofile.at[index, 'BamFilteredPath'] = bam_filtered
-
-    def run_bowtie2_mapping(self, quality=20, threads=10):
-        """
-        Run Bowtie2 mapping and Samtools sorting for each sample using the trimmed reads.
-        Adds the paths of BAM files ('BamAllPath' and 'BamFilteredPath') to self.infofile.
-
-        Args:
-            quality (int): Minimum mapping quality.
-            threads (int): Number of threads to use.
-        """
-        if self.infofile is None or self.modality is None:
-            raise ValueError(
-                "No sample information or modality found. Please ensure to run read_column_from_excel first.")
-
-        for index, row in self.infofile.iterrows():
-            sample = row['Sample']
-            output_path = row['OutputPath']
-            aux_path = output_path  # Assuming aux files are in the same folder as output
-
-            # Paths for BAM files
-            bam_all = os.path.join(output_path, f"{sample}.all.bam")
-            bam_filtered = os.path.join(output_path, f"{sample}.q{quality}.bam")
-
-            if self.modality == 'single-end':
-                # Single-end mode: using trimmed.fastq.gz
-                trimmed_r1_path = os.path.join(output_path, "trimmed.fastq.gz")
-                if not os.path.exists(trimmed_r1_path):
-                    raise FileNotFoundError(f"Trimmed FASTQ file not found: {trimmed_r1_path}")
-
-                # Single-end command, using the trimmed.fastq.gz file
-                bowtie2_cmd = f"bowtie2 -x {self.genome_index} -U {trimmed_r1_path} -p {threads} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
-
-            elif self.modality == 'paired-end':
-                # Paired-end mode: using trimmed_R1.fastq.gz and trimmed_R2.fastq.gz
-                trimmed_r1_path = os.path.join(output_path, "trimmed_R1.fastq.gz")
-                trimmed_r2_path = os.path.join(output_path, "trimmed_R2.fastq.gz")
-
-                if not os.path.exists(trimmed_r1_path) or not os.path.exists(trimmed_r2_path):
-                    raise FileNotFoundError(f"Trimmed FASTQ files not found: {trimmed_r1_path}, {trimmed_r2_path}")
-
-                # Paired-end command, using the trimmed_R1.fastq.gz and trimmed_R2.fastq.gz files
-                bowtie2_cmd = f"bowtie2 -x {self.genome_index} -1 {trimmed_r1_path} -2 {trimmed_r2_path} -p {threads} | samtools sort --threads {threads} -T {aux_path}/{sample} -o {bam_all}"
-
-            else:
-                raise ValueError(f"Unsupported modality: {self.modality}")
-
-            # Run Bowtie2 and Samtools sorting
-            print(f"Running Bowtie2 and sorting for sample {sample}...")
-            subprocess.run(bowtie2_cmd, shell=True, check=True)
-
-            # Filter BAM by quality and index BAM files
-            print(f"Filtering BAM file for sample {sample} with minimum quality {quality}...")
-            view_cmd = f"samtools view --threads {threads} -b -q {quality} {bam_all} > {bam_filtered}"
-            subprocess.run(view_cmd, shell=True, check=True)
-
-            # Index both BAM files (all and filtered)
-            print(f"Indexing BAM files for sample {sample}...")
-            pysam.index(bam_all)
-            pysam.index(bam_filtered)
-
-            print(f"Bowtie2 mapping and BAM processing complete for sample {sample}.")
-
-            # Store the paths of the BAM files in self.infofile
-            self.infofile.at[index, 'BamAllPath'] = bam_all
-            self.infofile.at[index, 'BamFilteredPath'] = bam_filtered
-
-    def generate_umi_output_for_samples(self):
-        """
-        Generates UMI output files for all samples based on their .q20.bam files.
-        This method processes each BAM file in the infofile and generates:
-        1. Chromosome-Location-Strand-UMI-PCR.txt
-        2. Chromosome-Location-UMI-Count.bed
-        """
-        for index, row in self.infofile.iterrows():
-            sample = row['Sample']
-            bam_filtered_path = row['BamFilteredPath']  # Path to the .q20.bam file
-
-            if not bam_filtered_path or not os.path.exists(bam_filtered_path):
-                print(f"Warning: BAM file not found for sample {sample}. Skipping...")
-                continue
+            bam_filtered_path = row['BamFilteredPath']
 
             # Define the output file paths
             output_file_umi_pcr = os.path.join(row['OutputPath'], f"{sample}_Chromosome-Location-Strand-UMI-PCR.txt")
             output_file_umi_count = os.path.join(row['OutputPath'], f"{sample}_Chromosome-Location-UMI-Count.bed")
+            output_molecules = os.path.join(row['OutputPath'], f"{sample}_molecules.bed")
+            output_sites = os.path.join(row['OutputPath'], f"{sample}_sites.tsv")
+            output_qc = os.path.join(row['OutputPath'], f"{sample}_deduplication.json")
 
             # Call the utility function to generate UMI outputs
             print(f"Generating UMI output files for sample {sample}...")
-            process_bam_and_generate_umi_outputs(bam_filtered_path, output_file_umi_pcr, output_file_umi_count)
+            process_bam_and_generate_umi_outputs(
+                bam_filtered_path, output_file_umi_pcr, output_file_umi_count,
+                method=method, umi_length=umi_length, max_distance=max_distance,
+                min_mapq=min_mapq, five_prime_policy=five_prime_policy,
+                read_selection=read_selection, output_molecules=output_molecules,
+                output_sites=output_sites, output_qc=output_qc,
+            )
 
             # Optionally, store the paths to the generated files in the infofile
             self.infofile.at[index, 'UMI_PCR_Output'] = output_file_umi_pcr
             self.infofile.at[index, 'UMI_Count_Output'] = output_file_umi_count
+            self.infofile.at[index, 'Molecules_Output'] = output_molecules
+            self.infofile.at[index, 'Sites_Output'] = output_sites
+            self.infofile.at[index, 'Deduplication_QC'] = output_qc
 
         print("UMI output generation completed for all samples.")
 

@@ -3,9 +3,7 @@ import subprocess
 import pandas as pd
 import shutil
 import gzip
-from collections import defaultdict
 import pysam
-import matplotlib.pyplot as plt
 
 def read_excel_column(file_path):
     """
@@ -295,101 +293,17 @@ def extract_umi_parallel(fastq1_path, fastq2_path=None, adapter1=None, adapter2=
         print("Temporary chunk files and processed files removed.")
 
 
-def process_bam_and_generate_umi_outputs(input_bam, output_file_umi_pcr, output_file_umi_count):
-        """
-        Process a BAM file to extract UMI information and generate two output files:
-        1. Chromosome-Location-Strand-UMI-PCR.txt
-        2. Chromosome-Location-UMI-Count.bed
+def process_bam_and_generate_umi_outputs(input_bam, output_file_umi_pcr,
+                                         output_file_umi_count, **options):
+    """Deduplicate BLISS ends; see helixbusters.deduplication.deduplicate_bam.
 
-        Args:
-            input_bam (str): Path to the input BAM file (.q20.bam).
-            output_file_umi_pcr (str): Path to the output file for UMI and PCR counts.
-            output_file_umi_count (str): Path to the output file for unique UMI counts per location.
-        """
+    The existing three positional arguments remain supported. The count BED
+    now contains one row per position, summing molecules across strands.
+    """
+    from helixbusters.deduplication import deduplicate_bam
 
-        # Helper function to determine strand based on flag
-        def get_strand(flag):
-            return '-' if flag & 16 else '+'
+    return deduplicate_bam(input_bam, output_file_umi_pcr, output_file_umi_count, **options)
 
-        # Helper function to process the chromosome and retain 'chr' prefix if present
-        def process_chrom(chrom):
-            if chrom is None:
-                return None
-            original_chrom = chrom  # Keep the original chromosome with the 'chr' prefix if it's there
-            chrom = chrom.replace('chr', '')  # Strip the 'chr' prefix for processing
-
-            if chrom in ['X', 'x']:
-                return 'chr23' if 'chr' in original_chrom else '23'
-            elif chrom in ['Y', 'y']:
-                return 'chr24' if 'chr' in original_chrom else '24'
-
-            try:
-                int(chrom)  # Ensure that it's a numeric chromosome
-                return original_chrom  # Return the chromosome in its original form (with 'chr' if it was present)
-            except ValueError:
-                return None  # Return None for non-numeric chromosomes like 'MT'
-
-        # Dictionary to count occurrences of each unique row
-        unique_rows = defaultdict(int)
-
-        # Dictionary to count different UMIs per location
-        location_umi_count = defaultdict(set)
-
-        # Open the BAM file and process reads
-        with pysam.AlignmentFile(input_bam, "rb") as bamfile:
-            for read in bamfile:
-                read_name_full = read.query_name
-
-                # Extract read name and UMI
-                if '_' in read_name_full:
-                    read_name, umi = read_name_full.split('_')
-                else:
-                    read_name = read_name_full
-                    umi = ''  # Handle cases where UMI is missing
-
-                # Skip rows with empty UMI
-                if '_' in umi:
-                    continue
-
-                chrom = read.reference_name  # Chromosome
-                chrom = process_chrom(chrom)  # Process chromosome and retain 'chr' if present
-
-                if chrom is None:
-                    continue  # Skip reads with non-numeric or invalid chromosomes (like 'MT')
-
-                start = read.reference_start  # Start position (0-based)
-                strand = get_strand(read.flag)  # Strand
-
-                # Adjust for the negative strand
-                if strand == '-':
-                    start -= 1
-
-                # Store the row in the dictionary and count occurrences
-                key = (chrom, start, strand, umi)
-                unique_rows[key] += 1
-
-                # Track different UMIs per location (without UMI)
-                location_key = (chrom, start, strand)
-                location_umi_count[location_key].add(umi)
-
-        # Step 2: Writing the data for both output files
-        with open(output_file_umi_pcr, 'w') as file1, open(output_file_umi_count, 'w') as file2:
-            # Process the unique rows and generate the output for chr-loc-strand-umi-pcr
-            for (chrom, start, strand, umi), pcr_count in sorted(unique_rows.items()):
-                end = start + 1  # Calculate the end position (start + 1)
-
-                # Write to the first file (Chromosome-Location-Strand-UMI-PCR.txt)
-                file1.write(f"{chrom}\t{start}\t{end}\t{strand}\t{umi}\t{pcr_count}\n")
-
-            # Process and write to the second file (Chromosome-Location-UMI-Count.bed)
-            for (chrom, start, strand), umis in sorted(location_umi_count.items()):
-                end = start + 1
-                umi_count = len(umis)  # Count different UMIs at this location
-
-                # Write to the second file (Chromosome-Location-UMI-Count.bed)
-                file2.write(f"{chrom}\t{start}\t{end}\t{umi_count}\n")
-
-        print(f"Processed {input_bam} and generated the UMI output files.")
 
 def plot_alignment_quality(bam_file, output_plot_path):
     """
@@ -402,6 +316,8 @@ def plot_alignment_quality(bam_file, output_plot_path):
     Returns:
         None
     """
+    import matplotlib.pyplot as plt
+
     # Open the BAM file
     alignment_qualities = []
 
