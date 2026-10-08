@@ -6,6 +6,9 @@ For the tested BLISS coordinate conventions, exact/directional UMI grouping,
 QC outputs, and migration notes, see [Coordinates and deduplication](docs/deduplication.md).
 For checked BWA/Bowtie2 execution, alignment filtering and mapping QC, see
 [Mapping](docs/mapping.md).
+For hg19/hg38/mm10/mm39 selection, canonical nuclear chromosomes and blacklist
+filtering, see [Genome configuration](docs/genomes.md) and the
+[reference catalog template](docs/references.example.json).
 
 **Helixbusters** is a Python-based pipeline for processing next-generation sequencing (NGS) data with Unique Molecular Identifier (UMI) extraction, adapter trimming, and BWA-based read alignment. It supports both single-end and paired-end sequencing and produces output files for UMI counts and PCR duplicates.
 

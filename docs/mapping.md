@@ -8,6 +8,10 @@ the sequence, retaining the UMI in the identifier.
 
 ## Existing API
 
+To select hg19/hg38/mm10/mm39 and remove noncanonical, mitochondrial and
+blacklisted reads, configure the [genome and blacklist](genomes.md) on the
+Helixbusters instance. The examples below inherit that configuration.
+
 ```python
 helixbusters.run_bwa_mapping(quality=20, threads=8, sort_threads=1, sort_memory="768M")
 
@@ -85,7 +89,8 @@ or parameter comparisons; a successful rerun replaces the corresponding files.
 The filtered BAM excludes unmapped, secondary, supplementary, QC-failed, unknown
 MAPQ (255), and below-threshold alignments. It retains coordinate-only duplicate
 flags, both selected input mates, and 5-prime clipping. It does not require
-proper-pair flags or apply a blacklist. The strict 5-prime policy in the
+proper-pair flags. When a genome is selected, canonical nuclear and blacklist
+filters are also applied as described in [genomes.md](genomes.md). The strict 5-prime policy in the
 [deduplication stage](deduplication.md) makes the later decision about ambiguous
 ends. MAPQ zero is retained only when the threshold permits it; MAPQ alone is
 not proof that an alignment is unique or a genomic end biologically correct.
