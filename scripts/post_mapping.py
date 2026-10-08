@@ -31,6 +31,7 @@ def main():
     report = commands.add_parser("report")
     report.add_argument("--samples", nargs="+", required=True)
     report.add_argument("--conditions", nargs="+", required=True)
+    report.add_argument("--genome", help="Restrict MultiQC chromosome plots to canonical nuclear contigs")
     args = parser.parse_args()
     if args.stage in {"sample", "group"} and (args.threads < 1 or args.bin_size < 1):
         parser.error("threads and bin-size must be positive")
@@ -42,7 +43,7 @@ def main():
     elif args.stage == "group":
         group_qc(args.group, args.summaries, args.counts, args.headers, args.bams, args.threads, args.bin_size)
     else:
-        report_content(args.samples, args.conditions)
+        report_content(args.samples, args.conditions, args.genome)
 
 
 if __name__ == "__main__":

@@ -175,6 +175,14 @@ contains task logs and allows Nextflow resume:
 nextflow run main.nf ... -resume
 ```
 
+MultiQC presents Samtools plots in two separate sections, in order:
+`SingleReplicate — Samtools` for `sample__*.txt` (individual all/filtered BAMs),
+then `MergedReplicate — Samtools` for `condition__*.txt` (filtered condition pools).
+The generated `helixbusters_multiqc_config.json` selects inputs for each section
+and excludes noncanonical contigs from chromosome plots. The underlying complete
+QC files are retained. Per-sample and per-condition Helixbusters tables remain
+separate; pooled BAMs are descriptive outputs, not additional biological replicates.
+
 For AA023 EXP1, the oligo order form specifies eight degenerate bases and the
 FASTQ diagnostic finds the reverse-complement barcode at offset 8. Use:
 

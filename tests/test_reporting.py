@@ -14,6 +14,23 @@ spec.loader.exec_module(reporting)
 
 
 class TestReporting(unittest.TestCase):
+    def test_multiqc_hides_noncanonical_contigs_without_changing_idxstats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            idxstats = root / 'sample.all.idxstats.txt'
+            original = ('chr1\t248956422\t100\t0\n1\t248956422\t20\t0\n'
+                        'chrM\t16569\t10\t0\nchrUn_GL000220v1\t1000\t5\t0\n'
+                        'chr17_KI270729v1_random\t1000\t3\t0\n')
+            idxstats.write_text(original)
+            with patch.object(reporting.Path, 'glob', return_value=[idxstats]), \
+                 patch.object(reporting, 'write_table'), \
+                 patch.object(reporting, 'write_json') as write_json:
+                reporting.report_content([], [], 'hg38')
+            config = write_json.call_args_list[0].args[1]
+            self.assertEqual(config['samtools_idxstats_ignore'],
+                             ['chr17_KI270729v1_random', 'chrM', 'chrUn_GL000220v1'])
+            self.assertEqual(idxstats.read_text(), original)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

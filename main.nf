@@ -213,8 +213,8 @@ process MULTIQC {
     def conditionArgs = conditions.collect { "'${it}'" }.join(' ')
     """
     python ${projectDir}/scripts/post_mapping.py report \\
-        --samples ${sampleArgs} --conditions ${conditionArgs}
-    multiqc . --filename multiqc_report.html --outdir . --data-dir --cl-config 'data_dir_name: multiqc_data'
+        --samples ${sampleArgs} --conditions ${conditionArgs} --genome '${params.genome}'
+    multiqc . --filename multiqc_report.html --outdir . --data-dir --cl-config 'data_dir_name: multiqc_data' --config helixbusters_multiqc_config.json
     multiqc --version > reporting_versions.txt
     samtools --version >> reporting_versions.txt
     """

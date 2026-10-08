@@ -307,8 +307,31 @@ def group_qc(group, summaries, counts, headers, bams=None, threads=2, bin_size=5
         coverage_track(merged, f"{group}.condition.filtered", threads, bin_size)
 
 
-def report_content(samples, conditions):
+def report_content(samples, conditions, genome=None):
     """MultiQC self-contained JSON tables with sample and pooled sections."""
+    multiqc_config = {
+        'module_order': [
+            'custom_content',
+            {'samtools': {'name': 'SingleReplicate — Samtools',
+                         'anchor': 'samtools_single_replicate',
+                         'path_filters': ['*/sample__*.txt']}},
+            {'samtools': {'name': 'MergedReplicate — Samtools',
+                         'anchor': 'samtools_merged_replicate',
+                         'path_filters': ['*/condition__*.txt']}},
+        ],
+    }
+    if genome is not None:
+        from helixbusters.genomes import canonical_lengths
+        canonical = canonical_lengths(genome)
+        allowed = set(canonical) | {chrom[3:] for chrom in canonical}
+        observed = set()
+        for path in Path('.').glob('*.idxstats.txt'):
+            with path.open() as handle:
+                for line in handle:
+                    if line.strip():
+                        observed.add(line.split('\t')[0])
+        multiqc_config['samtools_idxstats_ignore'] = sorted(observed - allowed)
+    write_json('helixbusters_multiqc_config.json', multiqc_config)
     description = ("Mapping rate uses initial primary reads; retention uses the same denominator. "
                    "Filter exclusions are sequential and mutually exclusive, not independent overlap fractions. "
                    "UMI duplication uses reads accepted for deduplication. Coverage tracks include PCR duplicates.")

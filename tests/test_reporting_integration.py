@@ -77,6 +77,7 @@ class TestReportingIntegration(unittest.TestCase):
             def run(*arguments, cwd):
                 result = subprocess.run(arguments, cwd=cwd, capture_output=True, text=True, timeout=90)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                return result
 
             for replicate, (sample, reads) in enumerate(fixtures.items(), 1):
                 out = root / sample
@@ -135,13 +136,18 @@ class TestReportingIntegration(unittest.TestCase):
             for directory in (root / "a", root / "b", group):
                 for path in directory.glob("*.txt"):
                     shutil.copy2(path, report / path.name)
-            run("multiqc", ".", "--filename", "multiqc_report.html", "--outdir", ".",
-                "--data-dir", "--cl-config", "data_dir_name: multiqc_data", cwd=report)
+            multiqc_result = run("multiqc", ".", "--filename", "multiqc_report.html", "--outdir", ".",
+                "--data-dir", "--cl-config", "data_dir_name: multiqc_data",
+                "--config", "helixbusters_multiqc_config.json", cwd=report)
             self.assertTrue((report / "multiqc_data").is_dir())
             self.assertTrue(any((report / "multiqc_data").iterdir()))
             html = (report / "multiqc_report.html").read_text()
             for text in ("Helixbusters samples", "Helixbusters conditions", "Samtools"):
                 self.assertIn(text, html)
+            self.assertIn('samtools_single_replicate', html)
+            self.assertIn('samtools_merged_replicate', html)
+            self.assertIn('Found 4 stats reports', multiqc_result.stderr)
+            self.assertIn('Found 1 stats reports', multiqc_result.stderr)
 
 
 if __name__ == "__main__":
