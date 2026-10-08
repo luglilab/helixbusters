@@ -135,7 +135,10 @@ class TestReportingIntegration(unittest.TestCase):
             for directory in (root / "a", root / "b", group):
                 for path in directory.glob("*.txt"):
                     shutil.copy2(path, report / path.name)
-            run("multiqc", ".", "--filename", "multiqc_report.html", "--outdir", ".", cwd=report)
+            run("multiqc", ".", "--filename", "multiqc_report.html", "--outdir", ".",
+                "--data-dir", "--cl-config", "data_dir_name: multiqc_data", cwd=report)
+            self.assertTrue((report / "multiqc_data").is_dir())
+            self.assertTrue(any((report / "multiqc_data").iterdir()))
             html = (report / "multiqc_report.html").read_text()
             for text in ("Helixbusters samples", "Helixbusters conditions", "Samtools"):
                 self.assertIn(text, html)

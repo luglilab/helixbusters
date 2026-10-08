@@ -208,7 +208,7 @@ process MULTIQC {
     """
     python ${projectDir}/scripts/post_mapping.py report \\
         --samples ${sampleArgs} --conditions ${conditionArgs}
-    multiqc . --filename multiqc_report.html --outdir .
+    multiqc . --filename multiqc_report.html --outdir . --data-dir --cl-config 'data_dir_name: multiqc_data'
     multiqc --version > reporting_versions.txt
     samtools --version >> reporting_versions.txt
     """
