@@ -146,9 +146,19 @@ and `dag.html` relative to the launch directory unless paths are specified.
 
 ## Stages and outputs
 
-1. `EXTRACT_UMI` uses the regex `(?P<umi_1>.{N})<sample barcode>` at the start
-   of each read, removes the UMI and barcode from the sequence, and appends the
-   UMI to the read name using UMI-tools.
+1. `EXTRACT_UMI` streams the original FASTQ through `prepare_bliss_reads.py`.
+   It requires an exact barcode immediately after the first `--umi_length`
+   bases, removes both UMI and barcode, and appends the UMI to the read name.
+   `--barcode_orientation` is `forward` by default; the AA023 EXP1 libraries
+   require `reverse_complement`. UMIs containing N are excluded. Inserts must
+   have at least `--minimum_insert_length` bases (default 20).
+   An optional `--technical_prefix` excludes entire reads whose post-barcode
+   sequence starts with that exact motif. It does not trim or rescue these
+   reads, and it does not filter internal occurrences or mismatch variants.
+   No fixed technical-sequence length is removed beyond UMI and barcode.
+   Each sample writes preparation JSON with counts and parameters and a
+   MultiQC preparation table, starting from original input records. Exclusion
+   counts are exclusive; reads with multiple issues receive the first reason.
 2. `MAP_READS` runs BWA-MEM or Bowtie2 and samtools through the tested Python
    mapping API. Its filtered BAM excludes low/unknown MAPQ, mitochondrial,
    noncanonical and blacklist-overlapping alignments. MAPQ is alignment
@@ -164,6 +174,22 @@ contains task logs and allows Nextflow resume:
 ```bash
 nextflow run main.nf ... -resume
 ```
+
+For AA023 EXP1, the oligo order form specifies eight degenerate bases and the
+FASTQ diagnostic finds the reverse-complement barcode at offset 8. Use:
+
+```bash
+--barcode_orientation reverse_complement --umi_length 8 \
+--minimum_insert_length 20 --technical_prefix CCCTATAGTGAGTCGTAT
+```
+
+The motif is observed after the barcode and matches a segment of the STD BLISS
+BOTTOM oligo. The prefix filter is conservative and assay-specific: its counts
+do not prove that these molecules are adapter dimers. The complete AA023 "new
+adapters" structure remains unconfirmed. Inspect preparation retention and a
+pilot mapping before interpreting full-library DSB signals. Do not enable this
+motif filter for unrelated libraries without evidence. Keep previous results and
+use a new output directory for the corrected analysis.
 
 The first pilot must confirm that the barcode is physically positioned directly
 after the UMI in R1 and that the barcode sequence is correct. The extraction

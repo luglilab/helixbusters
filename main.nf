@@ -8,6 +8,9 @@ params.genome = null
 params.reference_config = null
 params.aligner = 'bwa'
 params.umi_length = 8
+params.barcode_orientation = 'forward'
+params.minimum_insert_length = 20
+params.technical_prefix = ''
 params.mapq = 20
 params.map_threads = 8
 params.sort_threads = 1
@@ -41,6 +44,7 @@ process EXTRACT_UMI {
     label 'small'
     cpus 2
     publishDir "${params.outdir}/prepared", mode: 'copy'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/qc" }, mode: 'copy', pattern: '*.preparation*.json'
 
     input:
     tuple val(meta), val(barcode), path(reads)
@@ -48,15 +52,16 @@ process EXTRACT_UMI {
 
     output:
     tuple val(meta), path("${meta.sample}.umi.fastq.gz"), emit: prepared
+    path "${meta.sample}.preparation.json", emit: preparation_qc
+    path "${meta.sample}.preparation_mqc.json", emit: preparation_multiqc
 
     script:
     """
-    umi_tools extract \\
-        --extract-method=regex \\
-        --bc-pattern='(?P<umi_1>.{${params.umi_length}})${barcode}' \\
-        --stdin '${reads}' \\
-        --stdout '${meta.sample}.umi.fastq.gz' \\
-        --log '${meta.sample}.extract.log'
+    python ${projectDir}/scripts/prepare_bliss_reads.py \\
+        --reads '${reads}' --sample '${meta.sample}' --barcode '${barcode}' \\
+        --barcode-orientation '${params.barcode_orientation}' --umi-length '${params.umi_length}' \\
+        --minimum-insert-length '${params.minimum_insert_length}' \\
+        --technical-prefix '${params.technical_prefix}' --outdir .
     """
 }
 
@@ -195,6 +200,7 @@ process MULTIQC {
     path samples, stageAs: 'sample_summaries/*', arity: '1..*'
     path conditions, stageAs: 'condition_summaries/*', arity: '1..*'
     path samtools_reports, arity: '1..*'
+    path preparation_reports, arity: '1..*'
 
     output:
     path 'multiqc_report.html'
@@ -218,7 +224,7 @@ workflow {
     if (!params.manifest || !params.genome || !params.reference_config) {
         error 'Provide --manifest, --genome and --reference_config (see docs/nextflow.md)'
     }
-    ['map_threads', 'umi_length', 'coverage_bin_size'].each { key ->
+    ['map_threads', 'umi_length', 'coverage_bin_size', 'minimum_insert_length'].each { key ->
         if (!(params[key].toString() ==~ /[1-9][0-9]*/) || params[key].toLong() > Integer.MAX_VALUE) {
             error "--${key} must be a positive integer"
         }
@@ -231,6 +237,12 @@ workflow {
     }
     if (!(params.aligner in ['bwa', 'bowtie2'])) { error '--aligner must be bwa or bowtie2' }
     if (!(params.dedup_method in ['exact', 'directional'])) { error '--dedup_method must be exact or directional' }
+    if (!(params.barcode_orientation in ['forward', 'reverse_complement'])) {
+        error '--barcode_orientation must be forward or reverse_complement'
+    }
+    if (params.technical_prefix && !(params.technical_prefix ==~ /[ACGT]{12,}/)) {
+        error '--technical_prefix must contain at least 12 A/C/G/T bases'
+    }
 
     // Validate the complete manifest before emitting any sample for processing.
     manifest = Channel
@@ -261,7 +273,7 @@ workflow {
     reference = file(params.reference_config, checkIfExists: true)
     environment = CHECK_ENVIRONMENT(reference, params.genome, params.aligner)
     prepared = EXTRACT_UMI(manifest, environment.ready)
-    mapped = MAP_READS(prepared, params.genome, reference)
+    mapped = MAP_READS(prepared.prepared, params.genome, reference)
     dedup = DEDUPLICATE(mapped.filtered_bam)
     sample_inputs = mapped.filtered_bam
         .join(mapped.all_bam)
@@ -278,5 +290,6 @@ workflow {
         }
     conditions = CONDITION_QC(grouped)
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),
-            conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect())
+            conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect(),
+            prepared.preparation_multiqc.collect())
 }
