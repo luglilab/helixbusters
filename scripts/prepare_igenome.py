@@ -73,7 +73,12 @@ def extract_bwa_index(archive, genome_root, target_dir):
 def validate_blacklist(path):
     """Read and validate BED columns and gzip integrity before using a list."""
     intervals = 0
-    opener = gzip.open if path.name.lower().endswith(".gz") else open
+    with path.open("rb") as raw:
+        magic = raw.read(2)
+    named_gzip = path.name.lower().endswith(".gz")
+    if named_gzip and magic != b"\x1f\x8b":
+        raise ValueError(f"{path} has a .gz suffix but is not gzip-compressed")
+    opener = gzip.open if magic == b"\x1f\x8b" else open
     with opener(path, "rt", encoding="utf-8") as handle:
         for number, line in enumerate(handle, 1):
             if not line.strip() or line.startswith(("#", "track", "browser")):
