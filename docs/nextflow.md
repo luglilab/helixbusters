@@ -64,7 +64,8 @@ cite the Boyle-Lab paper when reporting analyses that use them.
 python scripts/prepare_igenome.py \
   --genome hg38 \
   --cache-dir /project/references/igenomes \
-  --output-config /project/references.json
+  --output-config /project/references.json \
+  --rate-limit 10M
 ```
 
 It downloads the official iGenomes archive, extracts only its classic BWA
@@ -167,3 +168,40 @@ pattern describes that layout; a successful Nextflow run cannot establish that
 the library design was interpreted correctly. Retain `report.html`,
 `timeline.html`, `trace.txt`, and each `*.mapping.json`/`*.dedup.json` with the
 analysis.
+
+## Reference downloads and shared iGenomes
+
+The preparer requires `curl`, uses the HTTPS S3 object endpoint, and retains
+resumable archives under `<cache-dir>/downloads/*.partial`. Rerun the same
+command after an interruption. `--attempts` defaults to 8; diagnostics include
+the curl error. HTTP errors, certificate failures and unsupported byte ranges
+stop immediately. `--base-url` selects another archive mirror with the same
+organism/source/build layout; use a separate cache when changing mirrors.
+SHA-256 records provenance; it is not a comparison with a provider checksum.
+The archive remains cached after extraction, so allow space for both archive
+and index. `100K` limits transfers to roughly 100 KiB/s and can make a large
+reference download take days. Output catalogs must have a new filename.
+
+Like nf-core's `igenomes_base`, an existing shared installation can be used:
+
+```bash
+python scripts/prepare_igenome.py \
+  --genome hg38 \
+  --igenomes-base /shared/igenomes \
+  --cache-dir ./references/igenomes \
+  --blacklist /shared/blacklists/hg38-blacklist.v2.bed.gz \
+  --blacklist-genome hg38 \
+  --output-config ./references_hg38.json
+```
+
+This mode reads `Homo_sapiens/UCSC/hg38/Sequence/BWAIndex/genome.fa`
+(or a version subdirectory) and leaves the shared installation untouched.
+Without `--blacklist`, it still downloads the build-matched blacklist.
+Keep UCSC hg38 separate from NCBI/Ensembl GRCh38 installations: provider
+contents and contig naming can differ even for the same assembly generation.
+
+Nextflow configuration is separated into `conf/base.config`,
+`conf/local.config`, and `conf/slurm.config`. Profiles retain the existing
+resource defaults. Site-specific overrides can be supplied with
+`-c /path/to/site.config`; reference selection still uses the validated JSON
+catalog through `--reference_config`.

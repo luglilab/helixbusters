@@ -9,11 +9,11 @@ from pathlib import Path, PurePosixPath
 import shutil
 import sys
 import tarfile
-import tempfile
-from urllib.request import Request, urlopen
+import subprocess
+import time
 
 
-BASE_URL = "https://igenomes.illumina.com.s3-website-us-east-1.amazonaws.com"
+BASE_URL = "https://s3.amazonaws.com/igenomes.illumina.com"
 BUILD_INFO = {
     "hg19": ("Homo_sapiens", "UCSC", "hg19", "Homo_sapiens_UCSC_hg19.tar.gz"),
     "hg38": ("Homo_sapiens", "UCSC", "hg38", "Homo_sapiens_UCSC_hg38.tar.gz"),
@@ -28,17 +28,47 @@ BOYLE_BLACKLISTS = {
 BLACKLIST_BASE_URL = "https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists"
 
 
-def download(url, destination):
-    digest = hashlib.sha256()
-    request = Request(url, headers={"User-Agent": "Helixbusters-reference-preparer/1.0"})
-    with urlopen(request, timeout=120) as response, destination.open("wb") as output:
-        while True:
-            block = response.read(1024 * 1024)
-            if not block:
-                break
-            output.write(block)
-            digest.update(block)
-    return digest.hexdigest()
+def download(url, destination, rate_limit=None, attempts=8):
+    """Resume a persistent partial file with curl; retain it after failure."""
+    if not shutil.which("curl"):
+        raise ValueError("curl is required for resumable downloads; load it in your environment")
+    command = ["curl", "--fail", "--location", "--show-error", "--silent",
+               "--connect-timeout", "30", "--speed-limit", "1", "--speed-time", "120",
+               "--continue-at", "-", "--output", str(destination)]
+    if rate_limit:
+        command.extend(["--limit-rate", rate_limit])
+    command.append(url)
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            if not destination.is_file() or destination.stat().st_size == 0:
+                raise ValueError(f"Empty download: {url}")
+            digest = hashlib.sha256()
+            with destination.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            return digest.hexdigest()
+        size = destination.stat().st_size if destination.exists() else 0
+        detail = result.stderr.strip()
+        # Invalid options, certificates, HTTP errors and unsupported ranges
+        # require operator intervention rather than repeated identical requests.
+        if result.returncode in (2, 3, 22, 33, 60) or attempt == attempts:
+            raise ValueError(f"Download failed at {size} bytes: {detail}; partial retained at {destination}")
+        delay = min(2 ** attempt, 60)
+        print(f"Download interrupted at {size} bytes; retry {attempt + 1}/{attempts} "
+              f"in {delay}s: {detail}", flush=True)
+        time.sleep(delay)
+
+
+def find_bwa_prefix(directory):
+    """Find a nonempty classic BWA index without modifying installed references."""
+    candidates = [directory / "genome.fa"]
+    candidates.extend(Path(str(path)[:-4]) for path in sorted(directory.glob("*/genome.fa.amb")))
+    for prefix in candidates:
+        if all(Path(str(prefix) + suffix).is_file() and
+               Path(str(prefix) + suffix).stat().st_size > 0 for suffix in INDEX_SUFFIXES):
+            return prefix
+    raise ValueError(f"No complete nonempty classic BWA index under {directory}")
 
 
 def extract_bwa_index(archive, genome_root, target_dir):
@@ -97,7 +127,7 @@ def validate_blacklist(path):
         raise ValueError("Blacklist BED contains no intervals")
 
 
-def prepare_blacklist(genome, cache):
+def prepare_blacklist(genome, cache, rate_limit=None, attempts=8):
     filename = BOYLE_BLACKLISTS.get(genome)
     if filename is None:
         raise ValueError(f"Boyle-Lab has no listed blacklist for {genome}; supply a build-matched BED manually")
@@ -108,7 +138,7 @@ def prepare_blacklist(genome, cache):
     if not destination.is_file() or destination.stat().st_size == 0:
         partial = destination.with_suffix(destination.suffix + ".partial")
         print(f"Downloading {url}", flush=True)
-        digest = download(url, partial)
+        digest = download(url, partial, rate_limit, attempts)
         validate_blacklist(partial)
         partial.replace(destination)
     else:
@@ -129,7 +159,16 @@ def main():
                         help="Required with --blacklist; explicit build label, which must match --genome")
     parser.add_argument("--cache-dir", required=True, help="Persistent reference cache directory on the HPC")
     parser.add_argument("--output-config", required=True, help="Output references.json path")
+    parser.add_argument("--rate-limit", help="curl transfer limit, e.g. 100K or 10M (bytes/s)")
+    parser.add_argument("--attempts", type=int, default=8, help="Maximum download attempts (default: 8)")
+    parser.add_argument("--igenomes-base", help="Existing local iGenomes root; do not download the archive")
+    parser.add_argument("--base-url", default=BASE_URL, help="iGenomes archive mirror base URL")
     args = parser.parse_args()
+    if args.attempts < 1:
+        parser.error("--attempts must be positive")
+    config_path = Path(args.output_config).expanduser().resolve()
+    if config_path.exists():
+        parser.error(f"output catalog already exists: {config_path}; choose a new --output-config")
 
     genome = args.genome
     cache = Path(args.cache_dir).expanduser().resolve()
@@ -148,33 +187,41 @@ def main():
             parser.error(f"invalid blacklist: {error}")
     else:
         try:
-            blacklist = prepare_blacklist(genome, cache)
+            blacklist = prepare_blacklist(genome, cache, args.rate_limit, args.attempts)
         except (OSError, EOFError, ValueError) as error:
             parser.error(str(error))
 
     organism, source, build, archive_name = BUILD_INFO[genome]
     genome_root = f"{organism}/{source}/{build}"
-    url = f"{BASE_URL}/{genome_root}/{archive_name}"
+    url = f"{args.base_url.rstrip('/')}/{genome_root}/{archive_name}"
     index_dir = cache / genome / "BWAIndex"
     index_prefix = index_dir / "genome.fa"
     config_path = Path(args.output_config).expanduser().resolve()
     cache.mkdir(parents=True, exist_ok=True)
 
     provenance_path = cache / genome / "igenome.provenance.json"
-    if all(Path(str(index_prefix) + suffix).is_file() for suffix in INDEX_SUFFIXES):
+    if args.igenomes_base:
+        directory = Path(args.igenomes_base).expanduser().resolve() / genome_root / "Sequence/BWAIndex"
+        index_prefix = find_bwa_prefix(directory)
+        provenance = {"source": "Existing iGenomes installation", "build": genome,
+                      "index": str(index_prefix), "archive_sha256": None}
+    elif all(Path(str(index_prefix) + suffix).is_file() and
+             Path(str(index_prefix) + suffix).stat().st_size > 0 for suffix in INDEX_SUFFIXES):
         provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {
             "source": "Illumina iGenomes", "build": genome, "index": str(index_prefix),
             "archive_sha256": None, "note": "Reused existing BWA index cache; source archive checksum unavailable"}
     else:
-        with tempfile.TemporaryDirectory(prefix=f".{genome}-download-", dir=cache) as tmp_name:
-            tmp = Path(tmp_name)
-            archive = tmp / archive_name
-            print(f"Downloading {url}", flush=True)
-            archive_sha256 = download(url, archive)
-            version = extract_bwa_index(archive, genome_root, index_dir)
-            provenance = {"source": "Illumina iGenomes", "url": url, "build": genome,
-                          "index": str(index_prefix), "bwa_index_version": version,
-                          "archive_sha256": archive_sha256}
+        if any(Path(str(index_prefix) + suffix).exists() for suffix in INDEX_SUFFIXES):
+            raise ValueError(f"Incomplete existing index at {index_prefix}; choose a new cache directory")
+        archive_dir = cache / "downloads"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive = archive_dir / (archive_name + ".partial")
+        print(f"Downloading {url} (partial cache: {archive})", flush=True)
+        archive_sha256 = download(url, archive, args.rate_limit, args.attempts)
+        version = extract_bwa_index(archive, genome_root, index_dir)
+        provenance = {"source": "Illumina iGenomes", "url": url, "build": genome,
+                      "index": str(index_prefix), "bwa_index_version": version,
+                      "archive_sha256": archive_sha256}
     provenance_path.parent.mkdir(parents=True, exist_ok=True)
     provenance_path.write_text(json.dumps(provenance, indent=2) + "\n")
 
