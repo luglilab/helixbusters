@@ -65,7 +65,7 @@ process MAP_READS {
     label 'mapping'
     // samtools sort -@ N adds N worker threads plus its main thread.
     cpus { (params.map_threads as Integer) + (params.sort_threads as Integer) + 1 }
-    publishDir "${params.outdir}/SingleReplicate/${meta.sample}/mapping", mode: 'copy'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/mapping" }, mode: 'copy'
 
     input:
     tuple val(meta), path(reads)
@@ -98,7 +98,7 @@ process DEDUPLICATE {
     tag "${meta.sample}"
     label 'small'
     cpus 1
-    publishDir "${params.outdir}/SingleReplicate/${meta.sample}/deduplication", mode: 'copy'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/deduplication" }, mode: 'copy'
 
     input:
     tuple val(meta), path(bam), path(bai)
@@ -125,9 +125,9 @@ process SAMPLE_QC {
     tag "${meta.sample}"
     label 'reporting'
     cpus 2
-    publishDir "${params.outdir}/SingleReplicate/${meta.sample}/qc", mode: 'copy', pattern: '*.{txt,json,tsv}'
-    publishDir "${params.outdir}/SingleReplicate/${meta.sample}/bigwig", mode: 'copy', pattern: '*.bw'
-    publishDir "${params.outdir}/SingleReplicate/${meta.sample}/bigwig", mode: 'copy', pattern: '*.ends.counts.bed'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/qc" }, mode: 'copy', pattern: '*.{txt,json,tsv}'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/bigwig" }, mode: 'copy', pattern: '*.bw'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/bigwig" }, mode: 'copy', pattern: '*.ends.counts.bed'
 
     input:
     tuple val(meta), path(filtered), path(filtered_bai), path(all_bam), path(all_bai), path(mapping_qc), path(counts), path(dedup_qc)
@@ -154,11 +154,11 @@ process CONDITION_QC {
     tag "${group}"
     label 'mapping'
     cpus 2
-    publishDir "${params.outdir}/MergedReplicate/${group}/qc", mode: 'copy', pattern: '*.{json,tsv}'
-    publishDir "${params.outdir}/MergedReplicate/${group}/bigwig", mode: 'copy', pattern: '*.{bw,bed}'
+    publishDir { "${params.outdir}/MergedReplicate/${group}/qc" }, mode: 'copy', pattern: '*.{json,tsv}'
+    publishDir { "${params.outdir}/MergedReplicate/${group}/bigwig" }, mode: 'copy', pattern: '*.{bw,bed}'
 
-    publishDir "${params.outdir}/MergedReplicate/${group}/mapping", mode: 'copy', pattern: '*.{bam,bai}'
-    publishDir "${params.outdir}/MergedReplicate/${group}/qc", mode: 'copy', pattern: '*.txt'
+    publishDir { "${params.outdir}/MergedReplicate/${group}/mapping" }, mode: 'copy', pattern: '*.{bam,bai}'
+    publishDir { "${params.outdir}/MergedReplicate/${group}/qc" }, mode: 'copy', pattern: '*.txt'
 
     input:
     tuple val(group), path(summaries, arity: '1..*'), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(bams, arity: '1..*'), path(bais, arity: '1..*')
