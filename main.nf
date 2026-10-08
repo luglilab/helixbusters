@@ -41,7 +41,8 @@ process EXTRACT_UMI {
 process MAP_READS {
     tag "${sample} (${params.genome}, ${params.aligner})"
     label 'mapping'
-    cpus params.map_threads + params.sort_threads
+    // samtools sort -@ N adds N worker threads plus its main thread.
+    cpus params.map_threads + params.sort_threads + 1
     publishDir "${params.outdir}/mapping", mode: 'copy'
 
     input:

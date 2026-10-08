@@ -4,6 +4,12 @@
 import argparse
 import json
 from pathlib import Path
+import sys
+
+# Nextflow runs this file from an isolated task directory. Make the project
+# package importable from the checkout even when it was not pip-installed.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from helixbusters.deduplication import deduplicate_bam
 from helixbusters.genomes import load_reference_config

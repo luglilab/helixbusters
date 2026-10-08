@@ -53,6 +53,37 @@ catalog must be absolute because Nextflow stages the catalog into task work
 directories. Select the actual build from the experiment metadata/reference
 provider; the samplesheet does not identify hg19 versus hg38 (or a mouse build).
 
+For BWA, you can prepare the index and generate a catalog automatically from
+the Illumina iGenomes UCSC archive. The helper also downloads the corresponding
+Boyle-Lab ENCODE blacklist for hg19, hg38 or mm10. The current Boyle-Lab list
+does not include mm39, and the iGenomes table does not list mm39; neither is
+silently substituted with an older build. These files are ENCODE blacklists;
+cite the Boyle-Lab paper when reporting analyses that use them.
+
+```bash
+python scripts/prepare_igenome.py \
+  --genome hg38 \
+  --cache-dir /project/references/igenomes \
+  --output-config /project/references.json
+```
+
+It downloads the official iGenomes archive, extracts only its classic BWA
+index files, and writes a `references.json` pointing to the cached index and
+downloaded blacklist. It records source URLs and SHA-256 values in provenance
+JSON files beside the cached resources. The iGenome archive can be large; use a
+cluster filesystem with adequate temporary and persistent space and outbound
+HTTPS access. This prepares the reference once; the regular Nextflow mapping command then uses
+`--reference_config /project/references.json` as before. For Bowtie2 or mm39, use a manually
+prepared reference catalog; for mm39, supply a blacklist that is explicitly
+matched to mm39.
+
+The downloaded Boyle-Lab files are `hg19-blacklist.v2.bed.gz`,
+`hg38-blacklist.v2.bed.gz`, and `mm10-blacklist.v2.bed.gz`. The helper validates
+gzip/BED structure; Helixbusters validates chromosome names and coordinates
+against the selected build when mapping begins. Source: [Boyle-Lab blacklist
+lists](https://github.com/Boyle-Lab/Blacklist/tree/master/lists) and Amemiya,
+Kundaje & Boyle, [The ENCODE Blacklist](https://doi.org/10.1038/s41598-019-45839-z).
+
 ## Run locally or on Slurm
 
 Start with one sample and a small representative FASTQ subset. For a local
@@ -102,6 +133,11 @@ marks the default partition when one exists). Then include, for example,
 `--queue compute` in the Nextflow command. The defaults in
 `nextflow.config` are generic starting values and must be adjusted to local
 scheduler policy. Do not launch the entire workflow directly on the login node.
+The mapping task reserves `map_threads + sort_threads + 1` CPUs because BWA
+and samtools sort run concurrently and `samtools sort -@ N` adds N workers to
+its main thread. If Slurm rejects the node request, lower the thread values to
+fit a node in the selected partition; `--map_threads 8 --sort_threads 1`
+reserves 10 CPUs.
 Nextflow creates `work/`, `results/`, `timeline.html`, `report.html`, `trace.txt`
 and `dag.html` relative to the launch directory unless paths are specified.
 

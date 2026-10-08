@@ -113,12 +113,23 @@ FASTQs and BAMs.
 
 ## 4. Configure the local reference catalog
 
-Copy `docs/references.example.json` to a private cluster-side file such as
-`references.json`. Replace index prefixes and blacklist paths with resources
-already installed on the HPC. Keep each blacklist's `genome` label equal to its
-selected build. Use `hg19`, `hg38`, `mm10`, or `mm39`; do not choose based on
-the human/mouse species alone. See [genome configuration](genomes.md) for the
-canonical-chromosome policy and compatibility checks.
+For BWA with hg19, hg38 or mm10, the repository can fetch an iGenomes index and
+the matching Boyle-Lab blacklist and generate the catalog in one setup step:
+
+```bash
+python scripts/prepare_igenome.py \
+  --genome hg38 \
+  --cache-dir /path/on/shared/storage/references/igenomes \
+  --output-config /path/on/shared/storage/references.json
+```
+
+Run this where outbound HTTPS is allowed and there is enough storage for the
+iGenomes archive and extracted index. The Boyle-Lab repository lists hg19,
+hg38 and mm10, but not mm39; do not substitute an older build. For Bowtie2 or
+mm39, copy `docs/references.example.json` to a cluster-side catalog and replace
+the index and blacklist paths with matching resources already installed on the
+HPC. See [genome configuration](genomes.md) for canonical chromosomes and
+build compatibility checks.
 
 The project does not download or build genome indexes, and it does not fetch
 blacklists. A complete reference index and the matching blacklist must exist

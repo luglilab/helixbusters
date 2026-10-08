@@ -38,9 +38,10 @@ python scripts/samplesheet_to_manifest.py \
   --check-fastq
 ```
 
-Copy `docs/references.example.json` to a cluster-side `references.json` and
-replace the placeholders with the existing reference index and matching
-blacklist paths. Then submit a pilot through the local scheduler profile:
+Prepare `references.json` with an existing reference index and matching
+blacklist. For BWA, `scripts/prepare_igenome.py` can fetch iGenomes and the
+Boyle-Lab blacklist and write the catalog for hg19, hg38 or mm10. See the
+[Nextflow guide](docs/nextflow.md). Then submit a pilot:
 
 ```bash
 nextflow run main.nf \
