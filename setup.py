@@ -15,7 +15,8 @@ setup(
         "biopython>=1.79",
         "cutadapt==4.9",
         "requests==2.22.0",
-        "pysam"
+        "pysam",
+        "openpyxl>=3.1",
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

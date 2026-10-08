@@ -1,120 +1,73 @@
-![Helixbusters Image](https://github.com/luglilab/helixbusters/blob/master/logo.png)
+![Helixbusters](https://github.com/luglilab/helixbusters/blob/master/logo.png)
 
 # Helixbusters
 
-For the tested BLISS coordinate conventions, exact/directional UMI grouping,
-QC outputs, and migration notes, see [Coordinates and deduplication](docs/deduplication.md).
-For checked BWA/Bowtie2 execution, alignment filtering and mapping QC, see
-[Mapping](docs/mapping.md).
-For hg19/hg38/mm10/mm39 selection, canonical nuclear chromosomes and blacklist
-filtering, see [Genome configuration](docs/genomes.md) and the
-[reference catalog template](docs/references.example.json).
+Helixbusters analyzes BLISS-like sequencing data. The Nextflow DSL2 workflow
+coordinates UMI/barcode extraction, mapping, alignment filtering and UMI-based
+deduplication; the Python package implements mapping and deduplication.
 
-**Helixbusters** is a Python-based pipeline for processing next-generation sequencing (NGS) data with Unique Molecular Identifier (UMI) extraction, adapter trimming, and BWA-based read alignment. It supports both single-end and paired-end sequencing and produces output files for UMI counts and PCR duplicates.
+## Install
 
-## Features
-
-- **UMI extraction**: Extract UMIs from single-end or paired-end FASTQ files.
-- **Adapter trimming**: Trim adapters from reads using `cutadapt` for both single-end and paired-end data.
-- **BWA mapping**: Align the trimmed reads to the genome using BWA and filter alignments based on mapping quality.
-- **UMI counting**: Generate output files for UMI counts per location and PCR duplicates.
-
-## Dependencies
-
-The following Python packages and external tools are required to run the pipeline:
-
-- **Python packages**:
-  - `pandas`
-  - `pysam`
-  - `subprocess`
-
-- **External tools**:
-  - `bwa`
-  - `samtools`
-  - `cutadapt`
-  - `umi_tools`
-
-You can install the required Python packages with:
+From a workstation or HPC login node with Conda/Mamba:
 
 ```bash
-pip install pandas pysam
-```
-
-Ensure that `bwa`, `samtools`, `cutadapt`, and `umi_tools` are installed and available in your system's PATH.
-
-## Installation
-
-Clone the repository and install the dependencies:
-
-```bash
-git clone https://github.com/yourusername/helixbusters.git
+git clone https://github.com/luglilab/helixbusters.git
 cd helixbusters
-pip install -r requirements.txt
+conda env create --file environment.yml
+conda activate helixbusters
+python -m pip install --no-deps -e .
+module load nextflow/26.04.6  # on the HPC
+nextflow -version
 ```
 
-## Usage
+The environment contains Python 3.12, Excel/CSV readers, `pysam`, BWA,
+Bowtie2, samtools, cutadapt and UMI-tools. It has no machine-specific Conda
+prefix. Nextflow is loaded separately through the HPC module system; see
+[HPC installation](docs/hpc.md).
 
-1. **Prepare the samplesheet**: Create an Excel or CSV file that contains the information about your samples, including file paths, sample barcodes, and modality (single-end or paired-end sequencing). The required columns are:
-   - `Sample`, `Replicate`, `Group`, `PathReadForward`, `SampleBarcodeForward`, `PathReadReverse`, `SampleBarcodeReverse`.
+## Start a Nextflow run
 
-2. **Run the pipeline**:
+The first workflow supports **single-end** samplesheets, including the layout
+in the SP036 example. Convert the workbook on a machine where the FASTQs are
+visible:
 
-```python
-from helixbusters.core import Helixbusters
-
-# Initialize Helixbusters with your samplesheet, species, mismatch, and genome index path.
-helixbusters = Helixbusters(samplesheet="path/to/samplesheet.xlsx", species="human", mismatch=1, genome_index="path/to/genome_index")
-
-# Read the samplesheet
-helixbusters.read_column_from_excel()
-
-# Create output folders for each sample
-helixbusters.create_sample_output_folders(output_folder="output/directory")
-
-# Process UMI extraction and trimming
-helixbusters.process_infofile(umi_length=8, threads=4)
-
-# Run BWA mapping and filter BAM files by quality
-helixbusters.run_bwa_mapping(quality=20, threads=10)
-
-# Generate UMI output files for all samples
-helixbusters.generate_umi_output_for_samples()
+```bash
+python scripts/samplesheet_to_manifest.py \
+  /path/on/cluster/samplesheet_helixbuster.xlsx \
+  /path/on/cluster/samples.tsv \
+  --check-fastq
 ```
 
-## Pipeline Steps
+Copy `docs/references.example.json` to a cluster-side `references.json` and
+replace the placeholders with the existing reference index and matching
+blacklist paths. Then submit a pilot through the local scheduler profile:
 
-1. **UMI extraction**: The pipeline extracts UMIs from single-end or paired-end FASTQ files, using parallel execution for large datasets.
-2. **Adapter trimming**: After UMI extraction, adapters are trimmed from the reads using `cutadapt`, which can handle both single-end and paired-end sequencing.
-3. **BWA mapping**: The trimmed reads are aligned to a reference genome using `bwa mem`, followed by sorting and filtering based on mapping quality using `samtools`.
-4. **UMI counting**: For each sample, UMI counts are generated per chromosome and location, and PCR duplicates are identified.
-
-## Example Workflow
-
-Here’s an example workflow for processing human samples using paired-end sequencing data:
-
-```python
-helixbusters = Helixbusters(
-    samplesheet="data/samplesheet.xlsx", 
-    species="human", 
-    mismatch=1, 
-    genome_index="/path/to/bwa/index"
-)
-helixbusters.read_column_from_excel()
-helixbusters.create_sample_output_folders(output_folder="results")
-helixbusters.process_infofile(umi_length=8, threads=8)
-helixbusters.run_bwa_mapping(quality=30, threads=8)
-helixbusters.generate_umi_output_for_samples()
+```bash
+nextflow run main.nf \
+  --manifest samples.tsv \
+  --genome hg38 \
+  --reference_config references.json \
+  --aligner bwa \
+  --map_threads 8 \
+  --sort_threads 1 \
+  --outdir results/pilot_hg38 \
+  -profile slurm
 ```
 
-## Output
+Choose the correct build (`hg19`, `hg38`, `mm10`, or `mm39`) from the experiment
+reference. The example above uses `hg38` only as syntax. Paired-end input is
+rejected in this first workflow. See the full [Nextflow guide](docs/nextflow.md)
+before running all samples.
 
-The pipeline generates several outputs for each sample:
-- **Trimmed reads**: FASTQ files after UMI extraction and adapter trimming.
-- **BAM files**: Aligned and filtered BAM files.
-- **UMI output files**:
-  - `Chromosome-Location-Strand-UMI-PCR.txt`: Contains UMI counts per chromosome, location, and strand.
-  - `Chromosome-Location-UMI-Count.bed`: Contains unique UMI counts per location.
+## Analysis behavior
 
-## License
+The workflow extracts the UMI and sample barcode from the start of R1 using
+`(?P<umi_1>.{N})<barcode>`, retaining the UMI in the read name. Confirm this
+matches the library design before interpreting results. Mapping applies the
+selected build's canonical nuclear chromosome set, removes mitochondrial and
+blacklist-overlapping reads, and records QC. The mapping `quality` setting is
+alignment MAPQ, not per-base Q30. See [genome configuration](docs/genomes.md),
+[mapping](docs/mapping.md), and [deduplication](docs/deduplication.md).
 
-This project is licensed under the MIT License.
+The pipeline does not download or build genome indexes or blacklists. All
+reference catalog paths should identify existing resources for the same build.

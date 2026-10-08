@@ -1,3 +1,11 @@
 .venv/
 __pycache__/
 *.py[cod]
+/work/
+/results/
+/.nextflow/
+/.nextflow.log
+/dag-*.html
+/report-*.html
+/timeline-*.html
+/trace-*.txt

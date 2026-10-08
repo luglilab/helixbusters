@@ -5,10 +5,15 @@ channels:
   - defaults
 dependencies:
   - python=3.12
-  - pandas
+  - pandas=2.2.2
+  - numpy=2.0
+  - openpyxl>=3.1
+  - xlrd>=2.0.1
+  - biopython>=1.79
+  - pysam
+  - cutadapt=4.9
   - bwa
   - samtools
-  - fastp
   - umi_tools
   - bowtie2
-prefix: /home/lugli/spuccio/anaconda3/envs/helixbusters
+  - pip
