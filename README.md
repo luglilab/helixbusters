@@ -50,12 +50,14 @@ nextflow run main.nf \
   --aligner bwa \
   --map_threads 8 \
   --sort_threads 1 \
+  --queue YOUR_PARTITION \
   --outdir results/pilot_hg38 \
   -profile slurm
 ```
 
 Choose the correct build (`hg19`, `hg38`, `mm10`, or `mm39`) from the experiment
-reference. The example above uses `hg38` only as syntax. Paired-end input is
+reference and replace `YOUR_PARTITION` with a permitted Slurm partition. The
+example above uses `hg38` only as syntax. Paired-end input is
 rejected in this first workflow. See the full [Nextflow guide](docs/nextflow.md)
 before running all samples.
 

@@ -2,6 +2,7 @@
 """Validate a Helixbusters single-end samplesheet and write a TSV manifest."""
 
 import argparse
+import gzip
 from pathlib import Path
 import sys
 
@@ -9,6 +10,23 @@ import pandas as pd
 
 
 REQUIRED = {"Sample", "Replicate", "Group", "PathReadForward", "SampleBarcodeForward"}
+
+
+def validate_fastq(path):
+    """Check compression and the first FASTQ record without reading the file."""
+    is_gzip = path.name.lower().endswith(".gz")
+    opener = gzip.open if is_gzip else open
+    try:
+        with opener(path, "rt", encoding="ascii") as handle:
+            lines = [handle.readline().rstrip("\r\n") for _ in range(4)]
+    except (OSError, EOFError, UnicodeError) as error:
+        if is_gzip:
+            raise ValueError(f"{path} has a .gz suffix but is not a readable gzip file: {error}") from error
+        raise ValueError(f"Cannot read FASTQ {path}: {error}") from error
+    if not all(lines) or not lines[0].startswith("@") or not lines[2].startswith("+"):
+        raise ValueError(f"{path} does not begin with a complete FASTQ record")
+    if len(lines[1]) != len(lines[3]):
+        raise ValueError(f"{path} has different sequence and quality lengths in its first record")
 
 
 def main():
@@ -54,6 +72,11 @@ def main():
             fastq = (sheet_path.parent / fastq).resolve()
         if args.check_fastq and not fastq.is_file():
             parser.error(f"FASTQ does not exist for {sample}: {fastq}")
+        if args.check_fastq:
+            try:
+                validate_fastq(fastq)
+            except ValueError as error:
+                parser.error(f"FASTQ check failed for {sample}: {error}")
         rows.append({
             "sample": sample,
             "replicate": str(record["Replicate"]).strip(),

@@ -135,7 +135,9 @@ Follow the [Nextflow guide](nextflow.md) to convert the workbook to a validated
 manifest and run the DSL2 workflow. Start with one sample and a reduced FASTQ;
 then scale to the full dataset once UMI/barcode orientation, reference paths,
 resource use and QC are correct. The workflow currently supports single-end
-samplesheets only and rejects paired-end layouts.
+samplesheets only and rejects paired-end layouts. This Slurm cluster has no
+default partition, so find a permitted partition with `sinfo -o '%P %a %l %D'`
+and pass it as `--queue <partition>` to `nextflow run`.
 
 For this workbook the sequencing is single-end, so downstream BLISS end
 coordinates are derived from that read. The filtered BAM applies the selected
@@ -150,6 +152,12 @@ with the run for read-retention counts and parameter provenance.
   environment from the repository's `environment.yml`.
 - **FASTQ not found:** the workbook still contains workstation paths or the
   input filesystem is not mounted in the job; replace them with cluster paths.
+- **`BadGzipFile` for a `.fastq.gz` input:** the suffix says gzip, but the file
+  contents are plain FASTQ or damaged. Check with `file input.fastq.gz` and
+  `gzip -t input.fastq.gz`. If it is plain FASTQ, either point the samplesheet
+  to that real `.fastq` file or create a compressed copy with
+  `gzip -c input.fastq > input.fixed.fastq.gz`, then update the samplesheet and
+  regenerate the manifest with `--check-fastq`.
 - **Incomplete index or missing blacklist:** request the correct build-specific
   resource paths from the reference administrator and update `references.json`.
 - **Conda cannot solve/download packages:** use the site's supported Conda

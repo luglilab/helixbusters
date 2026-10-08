@@ -39,7 +39,9 @@ python scripts/samplesheet_to_manifest.py \
 
 This checks required column names, unique sample IDs, A/C/G/T barcode content,
 single-end layout and (with `--check-fastq`) that every FASTQ path exists. The
-first workflow intentionally rejects paired-end columns; it must not silently
+FASTQ check also verifies that `.gz` files are gzip-compressed and that each
+input begins with a structurally valid FASTQ record. It reads only the first
+record, not the full file. This first workflow intentionally rejects paired-end columns; it must not silently
 interpret a paired library as single-end. The FASTQ path in the manifest is
 absolute (relative workbook paths are resolved against the workbook folder).
 
@@ -80,13 +82,24 @@ nextflow run main.nf \
   --aligner bwa \
   --map_threads 8 \
   --sort_threads 1 \
+  --queue YOUR_PARTITION \
   --work_dir /path/to/scratch/helixbusters_work \
   --outdir /path/to/project/helixbusters_results \
   -profile slurm
 ```
 
-If required by the cluster, add `--queue <partition>` and account/resource
-directives supported by the site's Nextflow configuration. The defaults in
+Replace `YOUR_PARTITION` with a permitted queue name. Add any account/resource
+directives required by the site's Nextflow configuration. On this HPC,
+`--queue <partition>` is required because Slurm has no default partition. Find
+the permitted partition names with:
+
+```bash
+sinfo -o '%P %a %l %D'
+```
+
+Use the partition name from the first column, without a trailing `*` (which
+marks the default partition when one exists). Then include, for example,
+`--queue compute` in the Nextflow command. The defaults in
 `nextflow.config` are generic starting values and must be adjusted to local
 scheduler policy. Do not launch the entire workflow directly on the login node.
 Nextflow creates `work/`, `results/`, `timeline.html`, `report.html`, `trace.txt`
