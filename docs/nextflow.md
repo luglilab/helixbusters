@@ -1,9 +1,10 @@
-# First Nextflow workflow
+# Single-end Nextflow workflow
 
 The initial DSL2 workflow handles the single-end layout in the SP036 example:
 samplesheet conversion, UMI/sample-barcode extraction, mapping, canonical
-chromosome and blacklist filtering, and per-sample UMI deduplication. It keeps
-mapping and deduplication QC reports and publishes outputs below `results/`.
+chromosome and blacklist filtering, per-sample UMI deduplication, mapping QC,
+bigWig generation and condition-level aggregation. It keeps mapping and
+deduplication QC reports and publishes outputs below `results/`.
 Paired-end support and scheduler-specific resource tuning are not part of this
 first workflow yet.
 
@@ -19,7 +20,8 @@ module load nextflow/26.04.6
 nextflow -version
 ```
 
-On the HPC, Nextflow is supplied by the module system (available versions
+The reporting workflow requires Nextflow >=24.10 (explicit input arity keeps
+single-replicate conditions as lists). On the HPC, Nextflow is supplied by the module system (available versions
 range from 21.04.3 to 26.04.6); use `module load nextflow/26.04.6`. The Python
 Conda environment does not install or pin Nextflow. If your site initializes
 modules differently, follow its shell setup instructions.
@@ -154,8 +156,9 @@ and `dag.html` relative to the launch directory unless paths are specified.
 3. `DEDUPLICATE` calls the coordinate/strand-aware deduplication implementation
    and writes families, counts, sites, molecules and QC per sample.
 
-Outputs are copied to `outdir/prepared`, `outdir/mapping`, and
-`outdir/deduplication`. Keep `work/` until the run completes successfully; it
+Outputs are copied to `outdir/prepared`, `outdir/SingleReplicate/<sample>`,
+`outdir/MergedReplicate/<group>` and `outdir/MultiQC`. This replaces the
+previous flat `mapping/` and `deduplication/` output layout for new runs. Keep `work/` until the run completes successfully; it
 contains task logs and allows Nextflow resume:
 
 ```bash
@@ -205,3 +208,131 @@ Nextflow configuration is separated into `conf/base.config`,
 resource defaults. Site-specific overrides can be supplied with
 `-c /path/to/site.config`; reference selection still uses the validated JSON
 catalog through `--reference_config`.
+
+## Mapping reports and bigWig tracks
+
+The manifest must contain `sample`, `group`, `replicate`, `barcode` and `fastq`.
+`group` is the biological condition; `replicate` identifies a biological
+replicate within that condition. Each `(group, replicate)` must have exactly
+one library. Replicate identifiers may be reused across different conditions.
+Sample, group and replicate labels must start with a letter or digit and
+contain only letters, digits, `_`, `.` or `-`; labels are never silently renamed.
+Technical-library pooling is not supported by this workflow.
+
+The new worker dependencies are `multiqc`, `deeptools` (`bamCoverage`) and
+`pybigwig`, listed in `environment.yml`. Update the existing environment after
+any running analysis has finished, rather than changing its packages mid-run:
+
+```bash
+conda env update -n helixbusters -f environment.yml
+conda activate helixbusters
+```
+
+`CHECK_ENVIRONMENT` verifies worker executables and the selected index and
+blacklist before UMI extraction starts, and records dependency versions in
+`MultiQC/environment.json`. Reference paths must be absolute and visible on
+all compute nodes. `SAMPLE_QC` requests 2 CPUs, 8 GB RAM and 4 hours;
+`CONDITION_QC` requests 2 CPUs, 16 GB and 12 hours. MultiQC requests 1 CPU,
+8 GB and 4 hours. Override these generic values in a site config if necessary.
+No packages are installed automatically by the workflow.
+
+```text
+<outdir>/
+  prepared/
+  SingleReplicate/<sample>/
+    mapping/         # Complete and filtered BAMs, indices, mapping JSON/logs
+    deduplication/   # UMI families, molecule/site counts and deduplication JSON
+    qc/              # Before/after samtools QC, summary TSV/JSON, provenance
+    bigwig/          # Filtered mapping coverage and deduplicated 5-prime ends
+  MergedReplicate/<group>/
+    mapping/         # Merged filtered BAM/BAI, retaining PCR duplicates
+    qc/              # Pooled summary, per-replicate table, merged samtools QC
+    bigwig/          # Pooled mapping coverage and raw/CPM/mean end tracks
+  MultiQC/
+    multiqc_report.html
+    multiqc_data/
+    helixbusters_samples.tsv
+    helixbusters_conditions.tsv
+    environment.json
+    reporting_versions.txt
+```
+
+The report contains two Helixbusters tables (samples and conditions), plus
+samtools `flagstat`, `stats` and `idxstats` from complete and filtered sample
+BAMs and merged filtered condition BAMs. Samtools entries are named
+`sample__<sample>.all`, `sample__<sample>.filtered` and
+`condition__<group>.filtered`, avoiding stage/condition name collisions.
+See [MultiQC samtools support](https://docs.seqera.io/multiqc/modules/samtools)
+and [custom content](https://docs.seqera.io/multiqc/custom_content).
+
+Mapping rate is `mapped_primary_records / primary_records`; retained yield
+is `retained_records / primary_records`. Both refer to aligner input **after
+UMI/barcode extraction**, not the original FASTQ read count. Filtering removes
+unmapped, secondary, supplementary, QC-failing, unknown/low-MAPQ,
+mitochondrial, noncanonical and blacklist-overlapping records in that order.
+Exclusion categories are mutually exclusive and order-dependent: a low-MAPQ
+mitochondrial read is counted as low MAPQ, not mitochondrial. They are not
+independent fractions of all reads overlapping the blacklist or mitochondria.
+The report includes retention and UMI duplication; the latter is
+`duplicate_reads / accepted_reads` in the deduplication stage. Ambiguous
+5-prime reads excluded from deduplication are also reported. Samtools
+duplicate-flag counts are not UMI duplication estimates; use the Helixbusters
+deduplication metrics for molecular duplication.
+
+BigWig files have distinct signal definitions:
+
+| Track suffix | Signal and normalization |
+| --- | --- |
+| `.coverage.CPM.bw` | Filtered BAM alignment coverage, before UMI deduplication; deepTools CPM with exact scaling and no read extension |
+| `.ends.raw.bw` | Number of independently UMI-deduplicated molecules at each 1-bp 5-prime position, strands summed |
+| `.ends.CPM.bw` | End counts divided by retained deduplicated molecule total, multiplied by 1e6 |
+| `.ends.mean.CPM.bw` | Conditions only: equal-weight mean of individual biological replicate end CPMs |
+
+`--coverage_bin_size` controls mapping coverage bins (default 50 bp). End
+tracks retain 1-bp resolution and are written in sparse batches; no dense
+whole-genome arrays are allocated. Chromosome names, order and lengths come
+from BAM headers and are not rewritten. Raw end counts are retained in
+`.ends.counts.bed`. See [bamCoverage](https://deeptools.readthedocs.io/en/latest/content/tools/bamCoverage.html)
+for its coverage and CPM definitions.
+
+Condition end tracks are produced **after independent library deduplication**.
+Raw counts are summed; pooled CPM uses the sum of molecule totals. The mean
+CPM track gives each biological replicate equal weight, including zero signal
+at positions observed only in other replicates. Libraries with zero molecules
+have an empty raw/CPM track and undefined normalization; if any replicate is
+empty, the condition mean CPM track is omitted and this is recorded in
+provenance. A condition with one replicate has identical pooled and mean CPM.
+Condition QC percentages are ratios of pooled counts; replicate means and
+sample standard deviations are additionally reported, without significance
+tests. Undefined percentages/SDs are missing, not zero.
+
+The condition BAM is a merge of **filtered, non-deduplicated** sample BAMs for
+mapping inspection. It must not be deduplicated across biological replicates.
+Keep individual samples as experimental units for downstream statistical
+analysis. CPM tracks compare relative distributions and do not establish
+absolute changes in break burden without an appropriate experimental
+normalization strategy.
+
+Allow disk space in both `work/` and the published results for an additional
+merged BAM per condition, approximately the sum of filtered replicate BAM
+sizes, plus tracks and QC. Use a new output directory when first running this
+version; original results are not migrated or deleted. Then resume using the
+same work directory as usual. Reporting scripts refuse existing output files.
+
+Focused validation (in the configured environment):
+
+```bash
+python -m unittest tests.test_reporting tests.test_reporting_integration tests.test_nextflow_reporting
+```
+
+The Nextflow test uses three synthetic samples in two conditions and stub
+process outputs to validate metadata, staging, publishing and the numeric
+11-CPU request for `--map_threads 5 --sort_threads 5`. It does not map reads.
+The reporting tests round-trip real bigWigs and parse the custom sections with
+MultiQC when those dependencies are available; missing tools produce explicit
+skips. Existing mapping/filtering/deduplication tests remain applicable.
+
+The reporting integration test starts from actual toy-genome BAM files and
+executes library QC, independently deduplicated end tracks, a condition BAM
+merge, deepTools coverage and a combined MultiQC report. It does not use human
+experimental data or claim to validate read alignment against hg38.

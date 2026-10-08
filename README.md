@@ -3,8 +3,9 @@
 # Helixbusters
 
 Helixbusters analyzes BLISS-like sequencing data. The Nextflow DSL2 workflow
-coordinates UMI/barcode extraction, mapping, alignment filtering and UMI-based
-deduplication; the Python package implements mapping and deduplication.
+coordinates UMI/barcode extraction, mapping, alignment filtering, UMI-based
+deduplication, bigWig tracks and MultiQC reports for samples and conditions;
+the Python package implements mapping, deduplication and reporting.
 
 ## Install
 
