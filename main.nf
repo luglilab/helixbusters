@@ -173,13 +173,16 @@ process CONDITION_QC {
     path "condition__${group}.filtered.*.txt", emit: samtools_qc
 
     script:
-    def quotePaths = { paths -> paths.collect { "'${it}'" }.join(' ') }
+    def summaryArgs = summaries.collect { "'${it}'" }.join(' ')
+    def countArgs = counts.collect { "'${it}'" }.join(' ')
+    def headerArgs = headers.collect { "'${it}'" }.join(' ')
+    def bamArgs = bams.collect { "'${it}'" }.join(' ')
     """
     python ${projectDir}/scripts/post_mapping.py group --group '${group}' \\
-        --summaries ${quotePaths(summaries)} \\
-        --counts ${quotePaths(counts)} \\
-        --headers ${quotePaths(headers)} \\
-        --bams ${quotePaths(bams)} --threads ${task.cpus} --bin-size ${params.coverage_bin_size}
+        --summaries ${summaryArgs} \\
+        --counts ${countArgs} \\
+        --headers ${headerArgs} \\
+        --bams ${bamArgs} --threads ${task.cpus} --bin-size ${params.coverage_bin_size}
     """
 }
 
@@ -200,10 +203,11 @@ process MULTIQC {
     path 'reporting_versions.txt'
 
     script:
-    def quotePaths = { paths -> paths.collect { "'${it}'" }.join(' ') }
+    def sampleArgs = samples.collect { "'${it}'" }.join(' ')
+    def conditionArgs = conditions.collect { "'${it}'" }.join(' ')
     """
     python ${projectDir}/scripts/post_mapping.py report \\
-        --samples ${quotePaths(samples)} --conditions ${quotePaths(conditions)}
+        --samples ${sampleArgs} --conditions ${conditionArgs}
     multiqc . --filename multiqc_report.html --outdir .
     multiqc --version > reporting_versions.txt
     samtools --version >> reporting_versions.txt
