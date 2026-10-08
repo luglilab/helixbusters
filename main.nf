@@ -42,7 +42,7 @@ process MAP_READS {
     tag "${sample} (${params.genome}, ${params.aligner})"
     label 'mapping'
     cpus params.map_threads + params.sort_threads
-    publishDir "${params.outdir}/mapping", mode: 'copy', pattern: "${sample}.*"
+    publishDir "${params.outdir}/mapping", mode: 'copy'
 
     input:
     tuple val(sample), path(reads)
@@ -77,7 +77,7 @@ process DEDUPLICATE {
     tag "${sample}"
     label 'small'
     cpus 1
-    publishDir "${params.outdir}/deduplication", mode: 'copy', pattern: "${sample}.*"
+    publishDir "${params.outdir}/deduplication", mode: 'copy'
 
     input:
     tuple val(sample), path(bam)
