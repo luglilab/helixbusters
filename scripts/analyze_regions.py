@@ -21,6 +21,7 @@ def main():
     p.add_argument('--design-file', required=True)
     p.add_argument('--windows', default='')
     p.add_argument('--peaks', action='store_true')
+    p.add_argument('--nolambda', action='store_true', help='Use the global MACS3 background instead of local lambda')
     p.add_argument('--min-reps-consensus', type=int, default=2)
     p.add_argument('--peak-width', type=int, default=100)
     p.add_argument('--peak-qvalue', type=float, default=0.01)
@@ -81,6 +82,8 @@ def main():
                        '-n', sample, '--outdir', str(folder), '--nomodel', '--shift', str(-args.peak_width // 2),
                        '--extsize', str(args.peak_width), '--keep-dup', 'all', '-q', str(args.peak_qvalue),
                        '--min-length', str(args.peak_width), '--max-gap', str(args.peak_width)]
+            if args.nolambda:
+                command.append('--nolambda')
             if expected:
                 with (folder / 'macs3.log').open('x') as log:
                     subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -108,7 +111,7 @@ def main():
             report['conditions'][group] = {'replicates': len(samples), 'consensus_segments': len(consensus), 'minimum_replicates': args.min_reps_consensus}
         regions = union_regions(common, header)
         write_matrix('peaks_consensus', regions, args.samples, sites)
-        report['peak_parameters'] = {'width': args.peak_width, 'qvalue': args.peak_qvalue, 'effective_genome_size': args.effective_genome_size, 'macs3_version': version, 'common_regions': len(regions)}
+        report['peak_parameters'] = {'width': args.peak_width, 'qvalue': args.peak_qvalue, 'effective_genome_size': args.effective_genome_size, 'nolambda': args.nolambda, 'background': 'global' if args.nolambda else 'local', 'macs3_version': version, 'common_regions': len(regions)}
     write_json('analysis.summary.json', report)
     write_json('analysis_mqc.json', {'id': 'helixbusters_regions', 'section_name': 'Helixbusters exploratory regions',
                                    'description': report['status'], 'plot_type': 'table',

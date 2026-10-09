@@ -26,6 +26,7 @@ params.window_sizes = '1000,5000,10000'
 params.min_reps_consensus = 2
 params.peak_width = 100
 params.peak_qvalue = 0.01
+params.peak_nolambda = false
 params.effective_genome_size = 'auto'
 
 process CHECK_ENVIRONMENT {
@@ -229,12 +230,13 @@ process ANALYZE_REGIONS {
     def moleculeArgs = molecules.collect { "'${it}'" }.join(' ')
     def windows = params.run_windows.toString() == 'true' ? params.window_sizes : ''
     def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
+    def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
     def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
         ([hg38: 2913022398L, mm10: 2652783500L][params.genome] ?: 1) : params.effective_genome_size
     """
     python ${projectDir}/scripts/analyze_regions.py \\
         --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --molecules ${moleculeArgs} \\
-        --design-file design.summary.json --windows '${windows}' ${peaks} \\
+        --design-file design.summary.json --windows '${windows}' ${peaks} ${background} \\
         --min-reps-consensus '${params.min_reps_consensus}' --peak-width '${params.peak_width}' \\
         --peak-qvalue '${params.peak_qvalue}' --effective-genome-size '${effectiveSize}'
     """
@@ -282,7 +284,7 @@ workflow {
     } else if (!(params.effective_genome_size.toString() ==~ /[1-9][0-9]*/)) {
         error '--effective_genome_size must be auto or a positive integer'
     }
-    ['run_windows', 'run_peak_calling'].each { key ->
+    ['run_windows', 'run_peak_calling', 'peak_nolambda'].each { key ->
         if (!(params[key].toString() in ['true', 'false'])) { error "--${key} must be true or false" }
     }
     if (!(params.window_sizes.toString() ==~ /[1-9][0-9]*(,[1-9][0-9]*)*/)) {

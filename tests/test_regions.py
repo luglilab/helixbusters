@@ -73,7 +73,10 @@ class TestRegions(unittest.TestCase):
             again = subprocess.run(command, cwd=root, capture_output=True, text=True)
             self.assertNotEqual(again.returncode, 0)
 
-    def test_peak_cli_consensus_matrix_with_fake_macs3(self):
+    def test_peak_cli_nolambda(self):
+        self.test_peak_cli_consensus_matrix_with_fake_macs3(nolambda=True)
+
+    def test_peak_cli_consensus_matrix_with_fake_macs3(self, nolambda=False):
         """Exercise orchestration, not MACS3 statistical peak detection."""
         script = Path(__file__).parents[1] / 'scripts' / 'analyze_regions.py'
         with tempfile.TemporaryDirectory() as directory:
@@ -91,6 +94,7 @@ else:
     assert '--nomodel' in args and '-c' not in args
     sample = args[args.index('-n') + 1]
     folder = Path(args[args.index('--outdir') + 1])
+    (folder / 'arguments.json').write_text(__import__('json').dumps(args))
     interval = (0, 20) if sample == 'a' else (10, 30)
     (folder / f'{sample}_peaks.narrowPeak').write_text(f'chr1\\t{interval[0]}\\t{interval[1]}\\tp\\t0\\t.\\t1\\t2\\t3\\t1\\n')
 ''')
@@ -105,8 +109,17 @@ else:
             command = [sys.executable, str(script), '--samples', 'a', 'b', '--counts', 'a.counts.bed', 'b.counts.bed',
                        '--headers', 'header.json', 'header.json', '--molecules', 'a.molecules.bed', 'b.molecules.bed',
                        '--design-file', 'design.json', '--peaks', '--min-reps-consensus', '2']
+            if nolambda:
+                command.append('--nolambda')
             result = subprocess.run(command, cwd=root, env={**os.environ, 'PATH': f'{root}:{os.environ.get("PATH", "")}'}, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            for sample in ('a', 'b'):
+                arguments = json.loads((root / f'SingleReplicate/{sample}/peaks/arguments.json').read_text())
+                self.assertEqual('--nolambda' in arguments, nolambda)
+                provenance = json.loads((root / f'SingleReplicate/{sample}/peaks/provenance.json').read_text())
+                self.assertEqual('--nolambda' in provenance['command'], nolambda)
+            summary = json.loads((root / 'analysis.summary.json').read_text())
+            self.assertEqual(summary['peak_parameters']['nolambda'], nolambda)
             self.assertEqual((root / 'MergedReplicate/treated/peaks/treated.consensus.bed').read_text(),
                              'chr1\t10\t20\ttreated_1\t2\ta,b\n')
             with (root / 'peaks_consensus.counts.tsv').open() as handle:

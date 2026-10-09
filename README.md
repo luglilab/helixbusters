@@ -212,6 +212,17 @@ genome sizes are 2,913,022,398 for hg38 and 2,652,783,500 for mm10. Other
 assemblies require `--effective_genome_size`; this value is an approximation
 and can be overridden for the reference/read length used.
 
+For a sensitivity comparison without a control, add `--peak_nolambda` to
+forward `--nolambda` to MACS3 and use the global background instead of local
+lambda. It defaults to false. This can expose regional background biases;
+additional calls are not evidence of biological specificity. Keep the same
+q-value, smoothing and consensus threshold and use a separate output directory.
+The exact command and background choice are recorded in provenance and
+`Analysis/analysis.summary.json`. See the
+[MACS3 documentation](https://macs3-project.github.io/MACS/docs/callpeak.html).
+For sparse datasets, `--window_sizes 1000,5000,10000,50000,100000` also exports
+50- and 100-kb windows without changing the MACS3 smoothing width.
+
 Per-sample peaks, logs and provenance appear in `SingleReplicate/<sample>/peaks`.
 `MergedReplicate/<condition>/peaks/<condition>.consensus.bed` contains exact
 segments supported by at least `--min_reps_consensus` distinct biological

@@ -38,7 +38,7 @@ STUBS = {
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
     def test_optional_windows_and_peaks(self):
-        self.test_three_samples_two_conditions_and_integer_cpu_requests(['--run_windows', '--run_peak_calling', '--min_reps_consensus', '1'])
+        self.test_three_samples_two_conditions_and_integer_cpu_requests(['--run_windows', '--run_peak_calling', '--peak_nolambda', '--min_reps_consensus', '1'])
 
     def test_three_samples_two_conditions_and_integer_cpu_requests(self, analysis_options=()):
         with tempfile.TemporaryDirectory(prefix="helix-nextflow-") as directory:
