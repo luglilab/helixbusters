@@ -14,6 +14,26 @@ SPEC.loader.exec_module(preparation)
 
 
 class TestBlissPreparation(unittest.TestCase):
+    def test_tolerant_prefix_excludes_substitution_insertion_and_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            motif = 'CCCTATAGTGAGTCGTAT'
+            genomic = 'GATTACA' * 5
+            inserts = [motif + genomic, 'AC' + motif[2:] + genomic,
+                       motif[:8] + 'A' + motif[8:] + genomic,
+                       motif[:8] + motif[9:] + genomic, genomic]
+            source = root / 'input.fastq'
+            with source.open('w') as handle:
+                for i, insert in enumerate(inserts):
+                    seq = 'AACCGGTTCGTGTGAG' + insert
+                    handle.write(f'@r{i}\n{seq}\n+\n{"I" * len(seq)}\n')
+            counts = preparation.prepare(source, 'test', 'CTCACACG', 'reverse_complement',
+                                         8, 20, motif, root / 'out', 2)
+            self.assertEqual(counts['technical_prefix_reads'], 4)
+            self.assertEqual(counts['output_reads'], 1)
+            with gzip.open(root / 'out/test.umi.fastq.gz', 'rt') as handle:
+                self.assertEqual(handle.read().splitlines()[1], genomic)
+
     @unittest.skipUnless(shutil.which('multiqc'), 'MultiQC is not on PATH')
     def test_multiqc_combines_preparation_reports_from_two_samples(self):
         with tempfile.TemporaryDirectory() as directory:

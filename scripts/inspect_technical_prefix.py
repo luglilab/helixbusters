@@ -4,23 +4,11 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import sys
 
 from inspect_fastq_layout import fastq_sequences
-
-
-def prefix_distance(sequence, motif, maximum=2):
-    """Bounded Levenshtein distance to a prefix, with no free leading bases."""
-    # At most maximum insertions can extend a matching prefix.
-    sequence = sequence[:len(motif) + maximum]
-    previous = list(range(len(sequence) + 1))
-    for i, base in enumerate(motif, 1):
-        current = [i]
-        for j, observed in enumerate(sequence, 1):
-            current.append(min(previous[j] + 1, current[j - 1] + 1,
-                               previous[j - 1] + (base != observed)))
-        previous = current
-    candidates = previous[max(0, len(motif) - maximum):]
-    return min(candidates, default=maximum + 1)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from helixbusters.technical import prefix_distance
 
 
 def main():

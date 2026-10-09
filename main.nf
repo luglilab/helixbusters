@@ -11,6 +11,7 @@ params.umi_length = 8
 params.barcode_orientation = 'forward'
 params.minimum_insert_length = 20
 params.technical_prefix = ''
+params.technical_prefix_max_errors = 0
 params.mapq = 20
 params.map_threads = 8
 params.sort_threads = 1
@@ -61,7 +62,8 @@ process EXTRACT_UMI {
         --reads '${reads}' --sample '${meta.sample}' --barcode '${barcode}' \\
         --barcode-orientation '${params.barcode_orientation}' --umi-length '${params.umi_length}' \\
         --minimum-insert-length '${params.minimum_insert_length}' \\
-        --technical-prefix '${params.technical_prefix}' --outdir .
+        --technical-prefix '${params.technical_prefix}' \\
+        --technical-prefix-max-errors '${params.technical_prefix_max_errors}' --outdir .
     """
 }
 
@@ -242,6 +244,10 @@ workflow {
     }
     if (params.technical_prefix && !(params.technical_prefix ==~ /[ACGT]{12,}/)) {
         error '--technical_prefix must contain at least 12 A/C/G/T bases'
+    }
+    if (!(params.technical_prefix_max_errors.toString() in ['0', '1', '2']) ||
+        (params.technical_prefix_max_errors.toString() != '0' && !params.technical_prefix)) {
+        error '--technical_prefix_max_errors must be 0, 1 or 2; a technical_prefix is required for tolerant matching'
     }
 
     // Validate the complete manifest before emitting any sample for processing.

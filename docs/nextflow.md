@@ -153,8 +153,11 @@ and `dag.html` relative to the launch directory unless paths are specified.
    require `reverse_complement`. UMIs containing N are excluded. Inserts must
    have at least `--minimum_insert_length` bases (default 20).
    An optional `--technical_prefix` excludes entire reads whose post-barcode
-   sequence starts with that exact motif. It does not trim or rescue these
-   reads, and it does not filter internal occurrences or mismatch variants.
+   sequence starts with that motif. `--technical_prefix_max_errors` defaults
+   to 0 (exact matching); 1 or 2 allow anchored Levenshtein edits, including
+   substitutions, insertions and deletions. It does not trim or rescue these
+   reads, and it does not filter internal occurrences. Parameters and exclusion
+   counts are recorded in preparation JSON and MultiQC.
    No fixed technical-sequence length is removed beyond UMI and barcode.
    Each sample writes preparation JSON with counts and parameters and a
    MultiQC preparation table, starting from original input records. Exclusion
@@ -190,6 +193,14 @@ FASTQ diagnostic finds the reverse-complement barcode at offset 8. Use:
 --barcode_orientation reverse_complement --umi_length 8 \
 --minimum_insert_length 20 --technical_prefix CCCTATAGTGAGTCGTAT
 ```
+
+The HD1_ACUTE pilot on identical 100,000 prepared reads retained 71,741 reads
+with the two-edit filter, preserving 11,331 of the baseline 11,335 molecules.
+For the full-library comparison, add `--technical_prefix_max_errors 2` and use
+a new output directory (`AcuteChronic_technical_filter2`). This is exclusion,
+not read rescue. Keep strict 5-prime acceptance, and compare absolute molecule
+yield as well as percentages for every biological sample. The pilot does not
+establish performance in other samples or resolve all residual clipping.
 
 The motif is observed after the barcode and matches a segment of the STD BLISS
 BOTTOM oligo. The prefix filter is conservative and assay-specific: its counts
