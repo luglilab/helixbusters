@@ -258,6 +258,40 @@ remain the experimental units for subsequent inference. Low retained molecule
 counts and residual technical artifacts must be considered before interpreting
 hotspots biologically.
 
+## Controlled aligner pilot
+
+Before changing the production aligner, compare BWA, Bowtie2 end-to-end and
+Bowtie2 local on identical prepared single-end reads:
+
+```bash
+python scripts/pilot_aligner_comparison.py \
+  --prepared-dir /path/to/completed_run/prepared \
+  --samples HD1_ACUTE HD3_CHRONIC \
+  --reference-config /path/to/references_hg38.json \
+  --outdir /path/to/new_aligner_pilot \
+  --max-reads 100000 --seed 1729 --map-threads 6 --sort-threads 1
+```
+
+Both BWA and Bowtie2 indices must already be configured for the same reference.
+The script samples uniformly over each complete prepared FASTQ and reuses that
+subset for all three branches. It reads the full FASTQs once for sampling;
+alignment branches run sequentially. Allow 8 CPUs and 16 GB RAM with these
+thread settings. Existing output directories are rejected.
+
+`aligner_comparison.tsv` reports mapping, strict endpoint acceptance and molecule
+counts. `aligner_comparison.json` includes parameters, mapping provenance and
+pairwise agreement of read-level chromosome, 5-prime coordinate and strand.
+Each sample also has `bowtie2_recovered_reads.tsv` with MAPQ, CIGAR, edit count
+and sequence prefixes for reads accepted only by Bowtie2, plus per-branch
+`five_prime.json` diagnostics. Exact T7 motif flags are diagnostic, not an
+artifact classification. Reference headers are compared; matching headers do
+not establish identical reference nucleotide sequences.
+
+MAPQ values are aligner-dependent. More accepted reads alone do not demonstrate
+more reliable DSB signal, and sampled molecule counts do not estimate full-library
+complexity. Review coordinate concordance and recovered-read sequences before
+selecting an aligner or changing the strict endpoint filter.
+
 ## Validation
 
 Activate the project environment and put Nextflow on PATH, then run:
