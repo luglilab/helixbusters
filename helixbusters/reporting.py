@@ -28,12 +28,14 @@ def write_json(path, data):
         handle.write(json.dumps(data, indent=2, allow_nan=False) + "\n")
 
 
-def check_environment(reference_config, genome, aligner):
+def check_environment(reference_config, genome, aligner, check_macs3=False):
     """Fail before mapping if worker tools or selected references are missing."""
     from helixbusters.genomes import load_reference_config, make_genome_filter
     from helixbusters.mapping import validate_index
 
     tools = (aligner, "samtools", "umi_tools", "bamCoverage", "multiqc")
+    if check_macs3:
+        tools += ('macs3',)
     missing = [name for name in tools if shutil.which(name) is None]
     if missing:
         raise ValueError("Missing worker executables: " + ", ".join(missing) +

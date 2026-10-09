@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).parents[1]
 STUBS = {
+    'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p SingleReplicate/a/peaks MergedReplicate/treated/peaks\n    touch SingleReplicate/a/peaks/a_peaks.narrowPeak MergedReplicate/treated/peaks/treated.consensus.bed',
     "CHECK_ENVIRONMENT": "echo '{}' > environment.json\n    touch design.summary.json design.metadata.tsv design.metadata_mqc.json",
     "EXTRACT_UMI": "touch ${meta.sample}.umi.fastq.gz ${meta.sample}.preparation.json ${meta.sample}.preparation_mqc.json",
     "MAP_READS": """touch ${meta.sample}.q${params.mapq}.bam ${meta.sample}.q${params.mapq}.bam.bai
@@ -36,7 +37,10 @@ STUBS = {
 
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
-    def test_three_samples_two_conditions_and_integer_cpu_requests(self):
+    def test_optional_windows_and_peaks(self):
+        self.test_three_samples_two_conditions_and_integer_cpu_requests(['--run_windows', '--run_peak_calling', '--min_reps_consensus', '1'])
+
+    def test_three_samples_two_conditions_and_integer_cpu_requests(self, analysis_options=()):
         with tempfile.TemporaryDirectory(prefix="helix-nextflow-") as directory:
             root = Path(directory)
             # Only add stubs to the copied workflow. Production scripts remain
@@ -69,10 +73,13 @@ class TestNextflowReporting(unittest.TestCase):
                 "nextflow", "run", "main.nf", "-stub-run", "-profile", "local", "-c", "stub.config",
                 "--manifest", "samples.tsv", "--genome", "hg38", "--reference_config", "reference.json",
                 "--map_threads", "5", "--sort_threads", "5", "--coverage_bin_size", "50",
-                "--outdir", "outputs"], cwd=root, env={**os.environ, "NXF_OFFLINE": "true"},
+                "--outdir", "outputs", *analysis_options], cwd=root, env={**os.environ, "NXF_OFFLINE": "true"},
                 capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             outputs = root / "outputs"
+            if analysis_options:
+                self.assertTrue((outputs / 'Analysis' / 'windows_1000.counts.tsv').is_file())
+                self.assertTrue((outputs / 'SingleReplicate' / 'a' / 'peaks' / 'a_peaks.narrowPeak').is_file())
             for sample in ("a", "b", "c"):
                 self.assertEqual((outputs / "SingleReplicate" / sample / "mapping" / f"{sample}.cpu.log").read_text().strip(), "11")
                 self.assertTrue((outputs / "SingleReplicate" / sample / "bigwig" / f"{sample}.ends.CPM.bw").is_file())

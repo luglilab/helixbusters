@@ -186,10 +186,56 @@ existing output filenames.
 
 ## Downstream analysis status
 
-Genomic-window comparisons, MACS3 hotspot discovery, replicate consensus peaks
-(`--min_reps_consensus`), and differential analysis are **planned, not implemented
-in `main.nf`**. Experimental-design metadata is available for these future analyses.
-Peak significance and differential significance between conditions are distinct.
+Optional genomic windows and MACS3 hotspots are available in `main.nf`:
+
+```bash
+# Append to the usual Nextflow command; both options default to false.
+--run_windows --window_sizes 1000,5000,10000 \
+--run_peak_calling --min_reps_consensus 2 --peak_width 100 --peak_qvalue 0.01
+```
+
+Windows use raw integer molecular end counts, independently deduplicated per
+sample. Only bins observed in at least one sample are exported; other samples
+receive zero for these bins. Bins are anchored at coordinate zero and clipped
+at chromosome ends. `Analysis/windows_<width>.counts.tsv` and `.regions.bed`
+provide a common region universe and retain every sample as a separate column.
+`Analysis/analysis.samples.tsv` records condition, biological replicate and donor.
+
+Peak calling requires **MACS3 in the active worker environment**. The default
+mapping environment does not install it automatically. Each sample's molecular
+BED6 contains one record per UMI family; MACS3 uses `--nomodel --keep-dup all`
+to preserve independent molecules at identical coordinates. A 100-bp smoothing
+width uses shift -50, extension 100 and minimum peak length/maximum gap 100.
+This is exploratory hotspot discovery without an experimental control; the
+smoothed intervals are not individual break coordinates. Default effective
+genome sizes are 2,913,022,398 for hg38 and 2,652,783,500 for mm10. Other
+assemblies require `--effective_genome_size`; this value is an approximation
+and can be overridden for the reference/read length used.
+
+Per-sample peaks, logs and provenance appear in `SingleReplicate/<sample>/peaks`.
+`MergedReplicate/<condition>/peaks/<condition>.consensus.bed` contains exact
+segments supported by at least `--min_reps_consensus` distinct biological
+replicates of that condition. Its six columns are chromosome, start, end,
+identifier, support count and comma-separated supporting samples (the last
+column is not a strand). Overlap chains do not count as support across the
+whole union. A condition with fewer replicates than the threshold fails before
+mapping; use threshold 1 explicitly for descriptive singleton analysis.
+Conditions are discovered independently and are never used as MACS3 controls
+for each other. Their consensus intervals form a disjoint common universe in
+`Analysis/peaks_consensus.{regions.bed,counts.tsv}` for counting all samples.
+
+Region counts and summaries are produced in one 1-CPU reporting task (8 GB,
+4-hour reporting defaults); MACS3 samples run sequentially within that task.
+MultiQC includes a region discovery table. These options can be added on a
+resumed run with the same work directory; use a new output directory to
+preserve previously published results.
+
+**Differential analysis remains unimplemented.** Declared design metadata is
+exported, but no model is fitted. MACS3 q-values describe enrichment under its
+background model, not differences between conditions. Biological replicates
+remain the experimental units for subsequent inference. Low retained molecule
+counts and residual technical artifacts must be considered before interpreting
+hotspots biologically.
 
 ## Validation
 

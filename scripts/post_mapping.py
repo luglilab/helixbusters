@@ -16,6 +16,7 @@ def main():
     check.add_argument("--reference-config", required=True)
     check.add_argument("--genome", required=True)
     check.add_argument("--aligner", choices=("bwa", "bowtie2"), required=True)
+    check.add_argument('--check-macs3', action='store_true')
     sample = commands.add_parser("sample")
     for option in ("sample", "group", "replicate", "mapping", "dedup", "all-bam", "filtered-bam", "counts"):
         sample.add_argument(f"--{option}", required=True)
@@ -36,7 +37,7 @@ def main():
     if args.stage in {"sample", "group"} and (args.threads < 1 or args.bin_size < 1):
         parser.error("threads and bin-size must be positive")
     if args.stage == "check":
-        check_environment(args.reference_config, args.genome, args.aligner)
+        check_environment(args.reference_config, args.genome, args.aligner, args.check_macs3)
     elif args.stage == "sample":
         sample_qc(args.sample, args.group, args.replicate, args.mapping, args.dedup,
                   args.all_bam, args.filtered_bam, args.counts, args.threads, args.bin_size)

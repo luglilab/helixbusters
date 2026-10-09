@@ -411,3 +411,10 @@ The reporting integration test starts from actual toy-genome BAM files and
 executes library QC, independently deduplicated end tracks, a condition BAM
 merge, deepTools coverage and a combined MultiQC report. It does not use human
 experimental data or claim to validate read alignment against hg38.
+
+Optional downstream analysis: add `--run_windows --window_sizes 1000,5000,10000`
+for sparse integer molecule matrices, and/or `--run_peak_calling
+--min_reps_consensus 2` for per-sample MACS3 hotspots and condition consensus.
+MACS3 must be available on workers only when peak calling is enabled.
+See README downstream analysis for smoothing, effective genome size, output
+locations and statistical limits. These steps do not fit a differential model.

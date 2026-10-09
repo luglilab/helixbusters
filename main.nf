@@ -20,6 +20,13 @@ params.sort_memory = '768M'
 params.dedup_method = 'directional'
 params.outdir = 'results'
 params.coverage_bin_size = 50
+params.run_windows = false
+params.run_peak_calling = false
+params.window_sizes = '1000,5000,10000'
+params.min_reps_consensus = 2
+params.peak_width = 100
+params.peak_qvalue = 0.01
+params.effective_genome_size = 'auto'
 
 process CHECK_ENVIRONMENT {
     label 'small'
@@ -37,11 +44,12 @@ process CHECK_ENVIRONMENT {
     path 'design.*', emit: design_metadata
 
     script:
+    def peakCheck = params.run_peak_calling.toString() == 'true' ? '--check-macs3' : ''
     """
     python ${projectDir}/scripts/validate_experimental_design.py \\
         --manifest '${manifest_file}' --design '${params.design}'
     python ${projectDir}/scripts/post_mapping.py check \\
-        --reference-config '${reference_config}' --genome '${genome}' --aligner '${aligner}'
+        --reference-config '${reference_config}' --genome '${genome}' --aligner '${aligner}' ${peakCheck}
     """
 }
 
@@ -118,7 +126,7 @@ process DEDUPLICATE {
     output:
     path "${meta.sample}.families.tsv"
     tuple val(meta), path("${meta.sample}.counts.bed"), path("${meta.sample}.dedup.json"), emit: end_counts
-    path "${meta.sample}.molecules.bed"
+    tuple val(meta), path("${meta.sample}.molecules.bed"), emit: molecules
     path "${meta.sample}.sites.tsv"
 
     script:
@@ -198,6 +206,40 @@ process CONDITION_QC {
     """
 }
 
+process ANALYZE_REGIONS {
+    label 'reporting'
+    cpus 1
+    publishDir "${params.outdir}", mode: 'copy', pattern: '{SingleReplicate,MergedReplicate}/**'
+    publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: '*.{tsv,bed,json}'
+
+    input:
+    tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*')
+    path design_files, arity: '1..*'
+
+    output:
+    path '*.{tsv,bed,json}', emit: tables
+    path 'analysis_mqc.json', emit: multiqc
+    path 'SingleReplicate/*/peaks/*', optional: true
+    path 'MergedReplicate/*/peaks/*', optional: true
+
+    script:
+    def sampleArgs = samples.collect { "'${it}'" }.join(' ')
+    def countArgs = counts.collect { "'${it}'" }.join(' ')
+    def headerArgs = headers.collect { "'${it}'" }.join(' ')
+    def moleculeArgs = molecules.collect { "'${it}'" }.join(' ')
+    def windows = params.run_windows.toString() == 'true' ? params.window_sizes : ''
+    def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
+    def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
+        ([hg38: 2913022398L, mm10: 2652783500L][params.genome] ?: 1) : params.effective_genome_size
+    """
+    python ${projectDir}/scripts/analyze_regions.py \\
+        --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --molecules ${moleculeArgs} \\
+        --design-file design.summary.json --windows '${windows}' ${peaks} \\
+        --min-reps-consensus '${params.min_reps_consensus}' --peak-width '${params.peak_width}' \\
+        --peak-qvalue '${params.peak_qvalue}' --effective-genome-size '${effectiveSize}'
+    """
+}
+
 process MULTIQC {
     label 'reporting'
     cpus 1
@@ -209,6 +251,7 @@ process MULTIQC {
     path samtools_reports, arity: '1..*'
     path preparation_reports, arity: '1..*'
     path design_reports, arity: '1..*'
+    path analysis_reports
 
     output:
     path 'multiqc_report.html'
@@ -231,6 +274,28 @@ process MULTIQC {
 workflow {
     if (!params.manifest || !params.genome || !params.reference_config) {
         error 'Provide --manifest, --genome and --reference_config (see docs/nextflow.md)'
+    }
+    if (params.effective_genome_size.toString() == 'auto') {
+        if (params.run_peak_calling.toString() == 'true' && !(params.genome in ['hg38', 'mm10'])) {
+            error 'Provide --effective_genome_size for peak calling with this genome assembly'
+        }
+    } else if (!(params.effective_genome_size.toString() ==~ /[1-9][0-9]*/)) {
+        error '--effective_genome_size must be auto or a positive integer'
+    }
+    ['run_windows', 'run_peak_calling'].each { key ->
+        if (!(params[key].toString() in ['true', 'false'])) { error "--${key} must be true or false" }
+    }
+    if (!(params.window_sizes.toString() ==~ /[1-9][0-9]*(,[1-9][0-9]*)*/)) {
+        error '--window_sizes must be comma-separated positive integers'
+    }
+    ['min_reps_consensus', 'peak_width'].each { key ->
+        if (!(params[key].toString() ==~ /[1-9][0-9]*/) || params[key].toLong() > Integer.MAX_VALUE) {
+            error "--${key} must be a positive integer"
+        }
+    }
+    if ((params.peak_width as Integer) % 2 != 0) { error '--peak_width must be even' }
+    if (!(params.peak_qvalue.toString() ==~ /[0-9.eE+-]+/) || (params.peak_qvalue as Double) <= 0 || (params.peak_qvalue as Double) >= 1) {
+        error '--peak_qvalue must be between 0 and 1'
     }
     ['map_threads', 'umi_length', 'coverage_bin_size', 'minimum_insert_length'].each { key ->
         if (!(params[key].toString() ==~ /[1-9][0-9]*/) || params[key].toLong() > Integer.MAX_VALUE) {
@@ -266,6 +331,10 @@ workflow {
         .collect()
         .flatMap { rows ->
             if (!rows) { error 'Manifest contains no samples' }
+            if (params.run_peak_calling.toString() == 'true' &&
+                rows.groupBy { it.group }.any { group, members -> members.size() < (params.min_reps_consensus as Integer) }) {
+                error '--min_reps_consensus exceeds the biological replicate count of a condition'
+            }
             def seenSamples = [] as Set
             def seenReplicates = [] as Set
             rows.collect { row ->
@@ -305,7 +374,21 @@ workflow {
                   order.collect { bams[it] }, order.collect { bais[it] })
         }
     conditions = CONDITION_QC(grouped)
+    analysis_reports = Channel.empty()
+    if (params.run_windows.toString() == 'true' || params.run_peak_calling.toString() == 'true') {
+        region_inputs = qc.condition_input
+            .map { meta, summary, header, counts, bam, bai -> tuple(meta, counts, header) }
+            .join(dedup.molecules)
+            .collect(flat: false)
+            .map { rows ->
+                def ordered = rows.sort { a, b -> a[0].sample <=> b[0].sample }
+                tuple(ordered.collect { it[0].sample }, ordered.collect { it[1] },
+                      ordered.collect { it[2] }, ordered.collect { it[3] })
+            }
+        analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect())
+        analysis_reports = analysis.multiqc
+    }
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),
             conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect(),
-            prepared.preparation_multiqc.collect(), environment.design_metadata.flatten().collect())
+            prepared.preparation_multiqc.collect(), environment.design_metadata.flatten().collect(), analysis_reports.collect().ifEmpty([]))
 }
