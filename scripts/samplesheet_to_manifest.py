@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from helixbusters.design import validate_design
 
 
 REQUIRED = {"Sample", "Replicate", "Group", "PathReadForward", "SampleBarcodeForward"}
@@ -35,6 +37,7 @@ def main():
     parser.add_argument("manifest", help="Output tab-separated manifest")
     parser.add_argument("--check-fastq", action="store_true",
                         help="Require FASTQ files to exist on this machine")
+    parser.add_argument('--design', choices=('paired', 'unpaired', 'unspecified'), default='unspecified')
     args = parser.parse_args()
 
     sheet_path = Path(args.samplesheet).expanduser().resolve()
@@ -82,8 +85,13 @@ def main():
             "replicate": str(record["Replicate"]).strip(),
             "group": str(record["Group"]).strip(),
             "barcode": barcode,
-            "fastq": str(fastq.resolve()),
+            # Absolute paths may refer to an HPC filesystem, not this host.
+            "fastq": str(fastq),
         })
+        if 'Donor' in frame.columns:
+            rows[-1]['donor'] = '' if pd.isna(record['Donor']) else str(record['Donor']).strip()
+
+    validate_design(rows, args.design)
 
     out = Path(args.manifest).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)

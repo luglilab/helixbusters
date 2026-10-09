@@ -28,6 +28,36 @@ modules differently, follow its shell setup instructions.
 
 ## Prepare a manifest
 
+Declare the experimental design with `--design paired`, `--design unpaired`,
+or `--design unspecified` (backward-compatible default). Replicate numbers and
+sample names are never used to infer donor identity.
+
+For paired experiments, add a `Donor` column to the Excel/CSV samplesheet. The
+converter preserves it as `donor` in the TSV manifest. Use the same stable donor
+identifier across conditions, while `Replicate` identifies a biological library
+within each condition. Every donor must occur exactly once in each declared
+condition. Incomplete pairing is rejected; it requires an explicitly designed
+downstream model rather than automatic dropping of samples.
+
+```bash
+python scripts/samplesheet_to_manifest.py samples.xlsx samples.paired.tsv --design paired
+nextflow run main.nf --manifest samples.paired.tsv --design paired ...
+```
+
+For independent samples, use `--design unpaired`. Donor metadata is optional,
+but declared donor identities cannot repeat across conditions. For experiments
+whose pairing is not yet established, keep `unspecified`; this is valid for
+mapping/QC but must be resolved before statistical inference. Different treatment
+labels do not make repeated measurements from the same donor independent.
+
+The worker preflight validates design before extraction/mapping, writes
+`MultiQC/design.summary.json` and `design.metadata.tsv`, and includes experimental
+units in a dedicated MultiQC table. Donor metadata is also propagated in workflow
+sample metadata. Formulas `~ donor + condition` and `~ condition` are recorded
+as intended designs, not fitted models. This change does not implement differential
+analysis, MACS3, or consensus peaks; condition merging remains by `group` for both
+designs, and biological replicate support must remain distinct from donor pairing.
+
 The workflow uses a tab-separated manifest rather than reading Excel inside
 Nextflow. Convert and validate the workbook on the cluster, where FASTQ files
 are visible:

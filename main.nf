@@ -3,6 +3,7 @@
 nextflow.enable.dsl = 2
 
 params.samplesheet = null
+params.design = 'unspecified'
 params.manifest = null
 params.genome = null
 params.reference_config = null
@@ -29,12 +30,16 @@ process CHECK_ENVIRONMENT {
     path reference_config
     val genome
     val aligner
+    path manifest_file
 
     output:
     path 'environment.json', emit: ready
+    path 'design.*', emit: design_metadata
 
     script:
     """
+    python ${projectDir}/scripts/validate_experimental_design.py \\
+        --manifest '${manifest_file}' --design '${params.design}'
     python ${projectDir}/scripts/post_mapping.py check \\
         --reference-config '${reference_config}' --genome '${genome}' --aligner '${aligner}'
     """
@@ -203,6 +208,7 @@ process MULTIQC {
     path conditions, stageAs: 'condition_summaries/*', arity: '1..*'
     path samtools_reports, arity: '1..*'
     path preparation_reports, arity: '1..*'
+    path design_reports, arity: '1..*'
 
     output:
     path 'multiqc_report.html'
@@ -238,6 +244,9 @@ workflow {
         error '--mapq must be an integer between 0 and 254'
     }
     if (!(params.aligner in ['bwa', 'bowtie2'])) { error '--aligner must be bwa or bowtie2' }
+    if (!(params.design in ['paired', 'unpaired', 'unspecified'])) {
+        error '--design must be paired, unpaired or unspecified'
+    }
     if (!(params.dedup_method in ['exact', 'directional'])) { error '--dedup_method must be exact or directional' }
     if (!(params.barcode_orientation in ['forward', 'reverse_complement'])) {
         error '--barcode_orientation must be forward or reverse_complement'
@@ -271,13 +280,14 @@ workflow {
                 }
                 if (!(row.barcode ==~ /[ACGT]+/)) { error "Invalid barcode for ${row.sample}" }
                 if (!row.fastq) { error "Missing FASTQ for ${row.sample}" }
-                tuple([sample: row.sample, group: row.group, replicate: row.replicate],
+                tuple([sample: row.sample, group: row.group, replicate: row.replicate, donor: row.donor ?: ''],
                       row.barcode, file(row.fastq, checkIfExists: true))
             }
         }
 
     reference = file(params.reference_config, checkIfExists: true)
-    environment = CHECK_ENVIRONMENT(reference, params.genome, params.aligner)
+    environment = CHECK_ENVIRONMENT(reference, params.genome, params.aligner,
+                                    file(params.manifest, checkIfExists: true))
     prepared = EXTRACT_UMI(manifest, environment.ready)
     mapped = MAP_READS(prepared.prepared, params.genome, reference)
     dedup = DEDUPLICATE(mapped.filtered_bam)
@@ -297,5 +307,5 @@ workflow {
     conditions = CONDITION_QC(grouped)
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),
             conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect(),
-            prepared.preparation_multiqc.collect())
+            prepared.preparation_multiqc.collect(), environment.design_metadata.flatten().collect())
 }

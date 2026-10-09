@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).parents[1]
 STUBS = {
-    "CHECK_ENVIRONMENT": "echo '{}' > environment.json",
+    "CHECK_ENVIRONMENT": "echo '{}' > environment.json\n    touch design.summary.json design.metadata.tsv design.metadata_mqc.json",
     "EXTRACT_UMI": "touch ${meta.sample}.umi.fastq.gz ${meta.sample}.preparation.json ${meta.sample}.preparation_mqc.json",
     "MAP_READS": """touch ${meta.sample}.q${params.mapq}.bam ${meta.sample}.q${params.mapq}.bam.bai
     touch ${meta.sample}.all.bam ${meta.sample}.all.bam.bai ${meta.sample}.mapping.json
