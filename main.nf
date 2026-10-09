@@ -45,12 +45,11 @@ process CHECK_ENVIRONMENT {
     path 'design.*', emit: design_metadata
 
     script:
-    def peakCheck = params.run_peak_calling.toString() == 'true' ? '--check-macs3' : ''
     """
     python ${projectDir}/scripts/validate_experimental_design.py \\
         --manifest '${manifest_file}' --design '${params.design}'
     python ${projectDir}/scripts/post_mapping.py check \\
-        --reference-config '${reference_config}' --genome '${genome}' --aligner '${aligner}' ${peakCheck}
+        --reference-config '${reference_config}' --genome '${genome}' --aligner '${aligner}'
     """
 }
 
@@ -207,6 +206,35 @@ process CONDITION_QC {
     """
 }
 
+process MACS3_CALLPEAK {
+    tag "${meta.sample}"
+    label 'reporting'
+    cpus 1
+    conda "${projectDir}/environment.yml"
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/peaks" }, mode: 'copy'
+
+    input:
+    tuple val(meta), path(counts), path(header), path(molecules)
+
+    output:
+    tuple val(meta), path("${meta.sample}_peaks.narrowPeak"), path("${meta.sample}.provenance.json"), emit: peaks
+    tuple val(meta), path("${meta.sample}_peaks.xls"), emit: xls
+    tuple val(meta), path("${meta.sample}_summits.bed"), emit: bed
+    path "${meta.sample}.versions.json", emit: versions
+    path 'macs3.log', emit: log
+
+    script:
+    def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
+    def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
+        ([hg38: 2913022398L, mm10: 2652783500L][params.genome] ?: 1) : params.effective_genome_size
+    """
+    python ${projectDir}/scripts/call_bliss_peaks.py \\
+        --sample '${meta.sample}' --counts '${counts}' --header '${header}' --molecules '${molecules}' \\
+        --peak-width '${params.peak_width}' --peak-qvalue '${params.peak_qvalue}' \\
+        --effective-genome-size '${effectiveSize}' ${background}
+    """
+}
+
 process ANALYZE_REGIONS {
     label 'reporting'
     cpus 1
@@ -214,7 +242,7 @@ process ANALYZE_REGIONS {
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: '*.{tsv,bed,json}'
 
     input:
-    tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*')
+    tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*'), path(peak_files), path(peak_provenance)
     path design_files, arity: '1..*'
 
     output:
@@ -228,6 +256,8 @@ process ANALYZE_REGIONS {
     def countArgs = counts.collect { "'${it}'" }.join(' ')
     def headerArgs = headers.collect { "'${it}'" }.join(' ')
     def moleculeArgs = molecules.collect { "'${it}'" }.join(' ')
+    def externalPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') +
+        ' --peak-provenance ' + peak_provenance.collect { "'${it}'" }.join(' ') : ''
     def windows = params.run_windows.toString() == 'true' ? params.window_sizes : ''
     def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
     def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
@@ -236,7 +266,7 @@ process ANALYZE_REGIONS {
     """
     python ${projectDir}/scripts/analyze_regions.py \\
         --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --molecules ${moleculeArgs} \\
-        --design-file design.summary.json --windows '${windows}' ${peaks} ${background} \\
+        --design-file design.summary.json --windows '${windows}' ${peaks} ${background} ${externalPeaks} \\
         --min-reps-consensus '${params.min_reps_consensus}' --peak-width '${params.peak_width}' \\
         --peak-qvalue '${params.peak_qvalue}' --effective-genome-size '${effectiveSize}'
     """
@@ -381,11 +411,18 @@ workflow {
         region_inputs = qc.condition_input
             .map { meta, summary, header, counts, bam, bai -> tuple(meta, counts, header) }
             .join(dedup.molecules)
+        if (params.run_peak_calling.toString() == 'true') {
+            calls = MACS3_CALLPEAK(region_inputs)
+            region_inputs = region_inputs.join(calls.peaks)
+        }
+        region_inputs = region_inputs
             .collect(flat: false)
             .map { rows ->
                 def ordered = rows.sort { a, b -> a[0].sample <=> b[0].sample }
                 tuple(ordered.collect { it[0].sample }, ordered.collect { it[1] },
-                      ordered.collect { it[2] }, ordered.collect { it[3] })
+                      ordered.collect { it[2] }, ordered.collect { it[3] },
+                      ordered.collect { it.size() > 4 ? it[4] : null }.findAll { it != null },
+                      ordered.collect { it.size() > 5 ? it[5] : null }.findAll { it != null })
             }
         analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect())
         analysis_reports = analysis.multiqc

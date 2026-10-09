@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helixbusters.regions import consensus_regions, load_sites, union_regions, window_regions, write_matrix
 from helixbusters.reporting import write_json
+from helixbusters.peaks import call_sample_peaks, read_peaks
 
 
 def main():
@@ -19,6 +20,8 @@ def main():
     for option in ('samples', 'counts', 'headers', 'molecules'):
         p.add_argument(f'--{option}', nargs='+', required=True)
     p.add_argument('--design-file', required=True)
+    p.add_argument('--peak-files', nargs='+')
+    p.add_argument('--peak-provenance', nargs='+')
     p.add_argument('--windows', default='')
     p.add_argument('--peaks', action='store_true')
     p.add_argument('--nolambda', action='store_true', help='Use the global MACS3 background instead of local lambda')
@@ -29,6 +32,9 @@ def main():
     args = p.parse_args()
     if len(set(args.samples)) != len(args.samples) or not all(len(items) == len(args.samples) for items in (args.counts, args.headers, args.molecules)):
         p.error('Samples and input lists must be unique and have matching lengths')
+    if args.peak_files or args.peak_provenance:
+        if not args.peaks or not args.peak_files or not args.peak_provenance or len(args.peak_files) != len(args.samples) or len(args.peak_provenance) != len(args.samples):
+            p.error('External peak files and provenance must match all samples with --peaks')
     widths = sorted(set(int(value) for value in args.windows.split(',') if value))
     if any(width < 1 for width in widths) or args.peak_width < 2 or args.peak_width % 2 or not 0 < args.peak_qvalue < 1 or args.effective_genome_size < 1:
         p.error('Widths must be positive; peak-width must be even; qvalue must be between 0 and 1')
@@ -40,7 +46,7 @@ def main():
     for sample in args.samples:
         groups[metadata[sample]['group']].append(sample)
     if args.peaks:
-        if shutil.which('macs3') is None:
+        if not args.peak_files and shutil.which('macs3') is None:
             p.error('MACS3 is required only when peak calling is enabled; activate an environment containing macs3')
         if any(not 1 <= args.min_reps_consensus <= len(samples) for samples in groups.values()):
             p.error('min-reps-consensus must not exceed the replicate count of any condition')
@@ -63,42 +69,24 @@ def main():
     all_peaks = {}
     version = None
     if args.peaks:
-        version = subprocess.check_output(['macs3', '--version'], text=True).strip()
-        for sample, molecule_path, sample_sites in zip(args.samples, args.molecules, sites, strict=True):
-            expected = sum(count for rows in sample_sites.values() for _, count in rows)
-            observed = defaultdict(int)
-            with Path(molecule_path).open() as handle:
-                for line in handle:
-                    fields = line.split()
-                    if len(fields) != 6 or fields[5] not in ('+', '-') or int(fields[2]) != int(fields[1]) + 1:
-                        raise ValueError(f'Invalid molecular BED for {sample}')
-                    observed[(fields[0], int(fields[1]))] += 1
-            if dict(observed) != {(chrom, start): count for chrom, rows in sample_sites.items() for start, count in rows}:
-                raise ValueError(f'Molecular BED and counts differ for {sample}')
-            folder = Path('SingleReplicate') / sample / 'peaks'
-            folder.mkdir(parents=True)
-            peakfile = folder / f'{sample}_peaks.narrowPeak'
-            command = ['macs3', 'callpeak', '-t', str(molecule_path), '-f', 'BED', '-g', str(args.effective_genome_size),
-                       '-n', sample, '--outdir', str(folder), '--nomodel', '--shift', str(-args.peak_width // 2),
-                       '--extsize', str(args.peak_width), '--keep-dup', 'all', '-q', str(args.peak_qvalue),
-                       '--min-length', str(args.peak_width), '--max-gap', str(args.peak_width)]
-            if args.nolambda:
-                command.append('--nolambda')
-            if expected:
-                with (folder / 'macs3.log').open('x') as log:
-                    subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+        versions = set()
+        for index, (sample, molecule_path, sample_sites) in enumerate(zip(args.samples, args.molecules, sites, strict=True)):
+            if args.peak_files:
+                peaks = read_peaks(args.peak_files[index], header)
+                provenance = json.loads(Path(args.peak_provenance[index]).read_text())
+                expected = report['samples'][sample]['molecules']
+                if provenance.get('sample') != sample or provenance['molecules'] != expected or any(provenance.get(key) != value for key, value in
+                        [('width', args.peak_width), ('qvalue', args.peak_qvalue),
+                         ('effective_genome_size', args.effective_genome_size), ('nolambda', args.nolambda)]):
+                    raise ValueError(f'Peak provenance differs from analysis inputs for {sample}')
             else:
-                peakfile.touch(exist_ok=False)
-            peaks = []
-            with peakfile.open() as handle:
-                for line in handle:
-                    fields = line.split()
-                    peaks.append((fields[0], int(fields[1]), int(fields[2])))
-            # Validate output coordinates before constructing condition consensus.
-            union_regions(peaks, header)
+                peaks, provenance = call_sample_peaks(sample, molecule_path, sample_sites, header,
+                    args.peak_width, args.peak_qvalue, args.effective_genome_size, args.nolambda,
+                    Path('SingleReplicate') / sample / 'peaks')
             all_peaks[sample] = peaks
             report['samples'][sample]['peaks'] = len(peaks)
-            write_json(folder / 'provenance.json', {'version': version, 'command': command, 'molecules': expected})
+            report['samples'][sample]['macs3_version'] = provenance['version']
+            versions.add(provenance['version'])
         common = []
         for group, samples in sorted(groups.items()):
             consensus = consensus_regions({sample: all_peaks[sample] for sample in samples}, args.min_reps_consensus)
@@ -111,6 +99,7 @@ def main():
             report['conditions'][group] = {'replicates': len(samples), 'consensus_segments': len(consensus), 'minimum_replicates': args.min_reps_consensus}
         regions = union_regions(common, header)
         write_matrix('peaks_consensus', regions, args.samples, sites)
+        version = next(iter(versions)) if len(versions) == 1 else sorted(versions)
         report['peak_parameters'] = {'width': args.peak_width, 'qvalue': args.peak_qvalue, 'effective_genome_size': args.effective_genome_size, 'nolambda': args.nolambda, 'background': 'global' if args.nolambda else 'local', 'macs3_version': version, 'common_regions': len(regions)}
     write_json('analysis.summary.json', report)
     write_json('analysis_mqc.json', {'id': 'helixbusters_regions', 'section_name': 'Helixbusters exploratory regions',

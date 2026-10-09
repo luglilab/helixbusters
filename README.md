@@ -201,8 +201,9 @@ at chromosome ends. `Analysis/windows_<width>.counts.tsv` and `.regions.bed`
 provide a common region universe and retain every sample as a separate column.
 `Analysis/analysis.samples.tsv` records condition, biological replicate and donor.
 
-Peak calling requires **MACS3 in the active worker environment**. The default
-mapping environment does not install it automatically. Each sample's molecular
+Peak calling requires **MACS3 in the active worker environment**. The project
+environment specification pins MACS3 3.0.5; existing environments require an
+explicit update. Each sample's molecular
 BED6 contains one record per UMI family; MACS3 uses `--nomodel --keep-dup all`
 to preserve independent molecules at identical coordinates. A 100-bp smoothing
 width uses shift -50, extension 100 and minimum peak length/maximum gap 100.
@@ -235,8 +236,17 @@ Conditions are discovered independently and are never used as MACS3 controls
 for each other. Their consensus intervals form a disjoint common universe in
 `Analysis/peaks_consensus.{regions.bed,counts.tsv}` for counting all samples.
 
-Region counts and summaries are produced in one 1-CPU reporting task (8 GB,
-4-hour reporting defaults); MACS3 samples run sequentially within that task.
+`MACS3_CALLPEAK` runs once per sample, with its own cache, logs, provenance and
+software-version JSON. Its input is the deduplicated molecular BED6 rather
+than a read-coverage BAM; biological pairing does not change this input format.
+Each task requests 1 CPU/8 GB/4 hours under the reporting defaults. Tasks may
+run concurrently according to scheduler availability. The process declares
+`environment.yml` for Nextflow-managed Conda (`-with-conda`); without that flag,
+the existing activated environment is used. No container image is configured.
+The downstream reporting task consumes staged peaks, builds independent
+condition consensus and counts their common regions. Changing window sizes
+alone does not change the per-sample peak-calling task command.
+Region counts and summaries use one separate 1-CPU/8-GB reporting task.
 MultiQC includes a region discovery table. These options can be added on a
 resumed run with the same work directory; use a new output directory to
 preserve previously published results.

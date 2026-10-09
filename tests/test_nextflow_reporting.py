@@ -11,7 +11,8 @@ import unittest
 
 ROOT = Path(__file__).parents[1]
 STUBS = {
-    'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p SingleReplicate/a/peaks MergedReplicate/treated/peaks\n    touch SingleReplicate/a/peaks/a_peaks.narrowPeak MergedReplicate/treated/peaks/treated.consensus.bed',
+    'MACS3_CALLPEAK': 'touch ${meta.sample}_peaks.narrowPeak ${meta.sample}.provenance.json ${meta.sample}_peaks.xls ${meta.sample}_summits.bed ${meta.sample}.versions.json macs3.log',
+    'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p MergedReplicate/treated/peaks\n    touch MergedReplicate/treated/peaks/treated.consensus.bed',
     "CHECK_ENVIRONMENT": "echo '{}' > environment.json\n    touch design.summary.json design.metadata.tsv design.metadata_mqc.json",
     "EXTRACT_UMI": "touch ${meta.sample}.umi.fastq.gz ${meta.sample}.preparation.json ${meta.sample}.preparation_mqc.json",
     "MAP_READS": """touch ${meta.sample}.q${params.mapq}.bam ${meta.sample}.q${params.mapq}.bam.bai
@@ -37,6 +38,9 @@ STUBS = {
 
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
+    def test_windows_without_peak_calling(self):
+        self.test_three_samples_two_conditions_and_integer_cpu_requests(['--run_windows'])
+
     def test_optional_windows_and_peaks(self):
         self.test_three_samples_two_conditions_and_integer_cpu_requests(['--run_windows', '--run_peak_calling', '--peak_nolambda', '--min_reps_consensus', '1'])
 
@@ -79,7 +83,11 @@ class TestNextflowReporting(unittest.TestCase):
             outputs = root / "outputs"
             if analysis_options:
                 self.assertTrue((outputs / 'Analysis' / 'windows_1000.counts.tsv').is_file())
-                self.assertTrue((outputs / 'SingleReplicate' / 'a' / 'peaks' / 'a_peaks.narrowPeak').is_file())
+                if '--run_peak_calling' in analysis_options:
+                    for sample in ('a', 'b', 'c'):
+                        self.assertTrue((outputs / 'SingleReplicate' / sample / 'peaks' / f'{sample}_peaks.narrowPeak').is_file())
+                else:
+                    self.assertFalse((outputs / 'SingleReplicate' / 'a' / 'peaks').exists())
             for sample in ("a", "b", "c"):
                 self.assertEqual((outputs / "SingleReplicate" / sample / "mapping" / f"{sample}.cpu.log").read_text().strip(), "11")
                 self.assertTrue((outputs / "SingleReplicate" / sample / "bigwig" / f"{sample}.ends.CPM.bw").is_file())

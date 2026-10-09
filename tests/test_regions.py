@@ -97,6 +97,8 @@ else:
     (folder / 'arguments.json').write_text(__import__('json').dumps(args))
     interval = (0, 20) if sample == 'a' else (10, 30)
     (folder / f'{sample}_peaks.narrowPeak').write_text(f'chr1\\t{interval[0]}\\t{interval[1]}\\tp\\t0\\t.\\t1\\t2\\t3\\t1\\n')
+    (folder / f'{sample}_peaks.xls').write_text('test peak output')
+    (folder / f'{sample}_summits.bed').write_text('chr1\\t10\\t11\\tsummit\\n')
 ''')
             fake.chmod(0o755)
             (root / 'header.json').write_text(json.dumps([['chr1', 100]]))
@@ -125,3 +127,35 @@ else:
             with (root / 'peaks_consensus.counts.tsv').open() as handle:
                 row = next(csv.DictReader(handle, delimiter='\t'))
             self.assertEqual((row['a'], row['b']), ('1', '0'))
+            # Dedicated tasks must match the previous direct invocation and
+            # aggregation must consume their outputs without calling MACS again.
+            cli = script.with_name('call_bliss_peaks.py')
+            peak_files, provenance_files = [], []
+            for sample in ('a', 'b'):
+                task = root / f'task_{sample}'
+                task.mkdir()
+                call = [sys.executable, str(cli), '--sample', sample,
+                        '--counts', str(root / f'{sample}.counts.bed'), '--header', str(root / 'header.json'),
+                        '--molecules', str(root / f'{sample}.molecules.bed'), '--effective-genome-size', '2913022398']
+                if nolambda:
+                    call.append('--nolambda')
+                result = subprocess.run(call, cwd=task, env={**os.environ, 'PATH': f'{root}:{os.environ.get("PATH", "")}'}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                peak_files.append(str(task / f'{sample}_peaks.narrowPeak'))
+                provenance_files.append(str(task / f'{sample}.provenance.json'))
+                self.assertTrue((task / f'{sample}.versions.json').is_file())
+            aggregate = root / 'aggregate'
+            aggregate.mkdir()
+            external = [sys.executable, str(script), '--samples', 'a', 'b',
+                        '--counts', str(root / 'a.counts.bed'), str(root / 'b.counts.bed'),
+                        '--headers', str(root / 'header.json'), str(root / 'header.json'),
+                        '--molecules', str(root / 'a.molecules.bed'), str(root / 'b.molecules.bed'),
+                        '--design-file', str(root / 'design.json'), '--peaks', '--min-reps-consensus', '2',
+                        '--peak-files', *peak_files, '--peak-provenance', *provenance_files]
+            if nolambda:
+                external.append('--nolambda')
+            result = subprocess.run(external, cwd=aggregate, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((aggregate / 'SingleReplicate').exists())
+            self.assertEqual((aggregate / 'peaks_consensus.counts.tsv').read_text(), (root / 'peaks_consensus.counts.tsv').read_text())
+            self.assertEqual(json.loads((aggregate / 'analysis.summary.json').read_text()), summary)

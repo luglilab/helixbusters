@@ -418,3 +418,12 @@ for sparse integer molecule matrices, and/or `--run_peak_calling
 MACS3 must be available on workers only when peak calling is enabled.
 See README downstream analysis for smoothing, effective genome size, output
 locations and statistical limits. These steps do not fit a differential model.
+
+Peak calling now uses one `MACS3_CALLPEAK` task per sample, followed by the
+consensus/counting reporting task. Inputs remain independently deduplicated
+1-bp molecular BED6 records; `BAMPE` fragment coverage is not substituted for
+BLISS ends. `--peak_nolambda` changes the per-sample MACS3 background.
+The process declares the pinned project `environment.yml` for `-with-conda`;
+default runs continue to use the activated environment. Container execution
+has not been configured or validated. Per-sample outputs include narrowPeak,
+XLS, summits, log, provenance and software-version JSON.
