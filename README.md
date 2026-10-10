@@ -140,6 +140,18 @@ and is an exploratory sensitivity test, not an isolated comparison of BAM/BED
 format. Raw mapped BAMs must not be substituted: they retain PCR duplicates and
 reads with ambiguous DSB ends. No mapping or molecular deduplication is rerun.
 
+The MACS3-only clipping branch adds `--accept-five-prime-clipping` to that script.
+It requires source BAMs with canonical chromosomes only, mitochondrial/blacklist
+exclusion and MAPQ >=20. Primary records with nonempty XA or NH>1 are removed;
+absence of these tags does not establish perfect genomic uniqueness. UMIs are
+regrouped directionally by aligned boundary and strand, accepting ambiguous
+5-prime ends without extrapolating clipped sequence. Spliced alignments remain
+excluded. A strict control uses the same multimapping exclusions, and
+`clipping_branch.QC.json` records both controls and the source molecular totals.
+New molecular BAMs feed q=0.05/0.10 MACS3, consensus >=2 donors and UpSet.
+Original gene/window counts, annotations and differential models are unchanged.
+These peaks represent mapped-read enrichment with reduced DSB-end specificity.
+
 `EXTRACT_UMI` runs `scripts/prepare_bliss_reads.py` automatically. It requires
 an exact barcode immediately after the initial UMI, removes both, and retains
 the UMI in the read name. `--barcode_orientation forward` uses the manifest
