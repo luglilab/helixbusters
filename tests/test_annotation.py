@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from helixbusters.annotation import GTFAnnotation
 from helixbusters.gene_signal import write_gene_signal
+from helixbusters.genomes import GenomeFilter
 
 ROOT = Path(__file__).parents[1]
 
@@ -23,6 +24,40 @@ def fixture_gtf(path, chromosome='chr1'):
     path.write_text(''.join(rows))
 
 class TestAnnotation(unittest.TestCase):
+    def test_density_subtracts_union_blacklist_preserves_counts_and_changes_rank(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture_gtf(root / 'genes.gtf')
+            # Overlapping rows must be subtracted once; chr aliases must match.
+            (root / 'blacklist.bed').write_text('1\t130\t210\nchr1\t180\t290\nchr1\t80\t100\n')
+            mask = GenomeFilter('hg38', root / 'blacklist.bed', 'hg38')
+            annotation = GTFAnnotation(root / 'genes.gtf', [('chr1', 1000)], 20, 5)
+            metadata = {s: {'sample':s, 'group':'condition', 'replicate':s, 'donor':''} for s in ['s1','s2']}
+            sites = [{'chr1':[(105,2),(400,3)]}] * 2
+            write_gene_signal(annotation, ['s1','s2'], sites, metadata, root/'masked', genome_filter=mask)
+            write_gene_signal(annotation, ['s1','s2'], sites, metadata, root/'unmasked')
+            def read(path):
+                with path.open() as handle:
+                    return list(csv.DictReader(handle, delimiter='\t'))
+            raw = read(root/'masked/condition.gene_body.candidate_genes.tsv')
+            density = read(root/'masked/condition.gene_body.density_candidate_genes.tsv')
+            self.assertEqual([r['gene_id'] for r in raw], ['B','A'])
+            self.assertEqual([r['gene_id'] for r in density], ['A','B'])
+            gene = density[0]
+            self.assertEqual(int(gene['uniquely_assignable_bp']), 195)
+            self.assertEqual(int(gene['effective_assignable_bp']), 35)
+            self.assertEqual(int(gene['excluded_assignable_bp']), 160)
+            self.assertAlmostEqual(float(gene['median_CPM_per_effective_kb']), (2/5)*1e6*1000/35)
+            for context in ('promoter','gene_body','combined'):
+                masked = read(root/f'masked/genes.{context}.counts.tsv')
+                unmasked = read(root/f'unmasked/genes.{context}.counts.tsv')
+                self.assertEqual([(r['gene_id'],r['s1'],r['s2']) for r in masked],
+                                 [(r['gene_id'],r['s1'],r['s2']) for r in unmasked])
+            provenance = json.loads((root/'masked/gene_signal.provenance.json').read_text())
+            self.assertEqual(provenance['blacklist_correction']['blacklist_sha256'], mask.sha256)
+            with self.assertRaisesRegex(ValueError, 'blacklisted'):
+                write_gene_signal(annotation,['s1'],[{'chr1':[(130,2)]}],{'s1':metadata['s1']},root/'invalid',genome_filter=mask)
+
     def test_half_open_promoters_both_strands_and_partition(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'genes.gtf'
@@ -54,6 +89,11 @@ class TestAnnotation(unittest.TestCase):
             root = Path(directory)
             fixture_gtf(root / 'genes.gtf')
             (root / 'header.json').write_text(json.dumps([['chr1', 248956422]]))
+            (root / 'blacklist.bed').write_text('chr1\t900\t910\n')
+            mask = GenomeFilter('hg38', root / 'blacklist.bed', 'hg38')
+            (root / 'environment.json').write_text(json.dumps({'reference': {'genome':'hg38',
+                'blacklist_bed':str(root/'blacklist.bed'), 'blacklist_genome':'hg38'},
+                'genome_filter':mask.metadata()}))
             (root / 'a.bed').write_text(''.join(f'chr1\t{s}\t{s+1}\t{c}\n' for s,c in [(79,2),(80,3),(105,4),(120,5),(595,6),(620,7)]))
             (root / 'b.bed').write_text('chr1\t80\t81\t7\nchr1\t105\t106\t2\n')
             (root / 'design.json').write_text(json.dumps({'design':'unspecified', 'sample_metadata':[
@@ -64,9 +104,12 @@ class TestAnnotation(unittest.TestCase):
                 '--samples','a','b','--counts',str(root/'a.bed'),str(root/'b.bed'),
                 '--headers',str(root/'header.json'),str(root/'header.json'), '--design-file',str(root/'design.json'),
                 '--gtf',str(root/'genes.gtf'),'--gtf-genome','hg38','--genome','hg38',
+                '--environment-file',str(root/'environment.json'),
                 '--promoter-upstream','20','--promoter-downstream','5','--analysis-dir',str(root),
                 '--outdir',str(root/'Annotation')],capture_output=True,text=True,timeout=60)
             self.assertEqual(result.returncode,0,result.stderr)
+            provenance = json.loads((root/'Annotation/GeneSignal/gene_signal.provenance.json').read_text())
+            self.assertEqual(provenance['blacklist_correction']['blacklist_sha256'], mask.sha256)
             with (root/'Annotation/dsb_feature_distribution.samples.tsv').open() as handle:
                 rows=list(csv.DictReader(handle,delimiter='\t'))
             self.assertEqual(sum(int(r['molecules']) for r in rows if r['sample']=='a'),27)

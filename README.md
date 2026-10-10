@@ -347,10 +347,39 @@ their sum conserves the retained sample total. This avoids assigning the same
 DSB to several genes. Promoter and body lists are alternatives to the combined
 summary; they are not additional independent molecules.
 
+### Feature-length-adjusted gene density
+
+Alongside the original CPM rankings, each condition/context now has
+`density_ranked_genes.tsv` and `density_candidate_genes.tsv`. These sort by
+median sample **CPM per effective kb**, then mean density, with the same
+replicate/molecule support thresholds. Short genes cannot bypass the support
+filter.
+
+`effective_assignable_bp` subtracts the union of blacklist intervals from the
+uniquely assigned GTF feature partition and restricts lengths to canonical
+chromosomes. Promoter and body lengths follow the same feature priority and
+ambiguity rules as gene counting. `excluded_assignable_bp` records the difference
+from `uniquely_assignable_bp`. Counts and original rankings are preserved;
+`mean_CPM_per_kb` keeps its original unmasked denominator. New mean/median
+`CPM_per_effective_kb` columns use the blacklist-adjusted denominator, including
+sample-level densities.
+
+The annotation task uses the mapping environment's resolved blacklist and
+checks its checksum, refusing a modified blacklist or inputs containing
+blacklisted/noncanonical DSB ends. A standalone invocation can pass
+`--blacklist /path/to/build_matched.bed.gz`; without a mask, lengths remain
+unadjusted and provenance records this explicitly. No additional packages are
+needed. Mappability and read-span-dependent loss near blacklist boundaries
+are not modeled. Effective length is a point-based descriptive opportunity,
+not a fully calibrated callable genome or enrichment background.
+
+For the same gene in ACUTE and CHRONIC, length is constant. A future differential
+model must use preserved integer counts, not length-divided densities.
+
 These are descriptive DSB-associated gene candidates, not differentially
 damaged genes or differentially expressed genes. Larger features have more
-opportunity to accumulate ends. The reported assignable lengths and CPM per kb
-are not corrected for blacklist or mappability and do not establish enrichment.
+opportunity to accumulate ends. CPM per effective kb is blacklist-adjusted but
+not corrected for mappability and does not establish enrichment.
 Condition comparisons require a separate replicate-aware differential model,
 confirmed donor structure, suitable normalization, abundance filtering and
 multiple-testing correction. No p-values or FDR are fabricated here.

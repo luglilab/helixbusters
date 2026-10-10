@@ -254,6 +254,7 @@ process ANALYZE_REGIONS {
     tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*'), path(peak_files), path(peak_provenance)
     path design_files, arity: '1..*'
     path annotation_gtf, stageAs: 'annotation_reference/*'
+    path annotation_environment
 
     output:
     path '*.{tsv,bed,json}', emit: tables
@@ -278,7 +279,7 @@ process ANALYZE_REGIONS {
     def annotationPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') : ''
     def geneMinimumReps = params.gene_min_reps != null ? params.gene_min_reps : params.min_reps_consensus
     def annotationCommand = annotation_gtf ?
-        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --gene-min-reps '${geneMinimumReps}' --gene-min-molecules '${params.gene_min_molecules}' --analysis-dir . --outdir Annotation ${annotationPeaks}" : ''
+        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --environment-file '${annotation_environment}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --gene-min-reps '${geneMinimumReps}' --gene-min-molecules '${params.gene_min_molecules}' --analysis-dir . --outdir Annotation ${annotationPeaks}" : ''
     def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
     def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
     def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
@@ -465,7 +466,7 @@ workflow {
                       ordered.collect { it.size() > 4 ? it[4] : null }.findAll { it != null },
                       ordered.collect { it.size() > 5 ? it[5] : null }.findAll { it != null })
             }
-        analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect(), annotation_reference)
+        analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect(), annotation_reference, environment.ready)
         analysis_reports = analysis.multiqc.mix(analysis.pca_multiqc, analysis.annotation_multiqc).flatten()
     }
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),

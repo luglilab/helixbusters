@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helixbusters.annotation import FEATURES, GTFAnnotation
-from helixbusters.genomes import canonical_lengths, normalize_genome
+from helixbusters.genomes import canonical_lengths, normalize_genome, GenomeFilter
 from helixbusters.regions import load_sites
 from helixbusters.reporting import validate_label
 from helixbusters.gene_signal import write_gene_signal
@@ -44,6 +44,9 @@ def main():
     parser.add_argument('--promoter-downstream', type=int, default=500)
     parser.add_argument('--gene-min-reps', type=int, default=2)
     parser.add_argument('--gene-min-molecules', type=int, default=2)
+    masking = parser.add_mutually_exclusive_group()
+    masking.add_argument('--environment-file', help='Pipeline environment.json containing the mapping blacklist and checksum')
+    masking.add_argument('--blacklist', help='Build-matched BED for a standalone annotation run')
     parser.add_argument('--analysis-dir', type=Path, default=Path('.'))
     parser.add_argument('--peak-files', nargs='+')
     parser.add_argument('--outdir', type=Path, required=True)
@@ -71,6 +74,17 @@ def main():
         if canonical in lengths and length != lengths[canonical]:
             parser.error(f'Reference chromosome length disagrees with {args.genome}: {chrom}')
     annotation = GTFAnnotation(args.gtf, header, args.promoter_upstream, args.promoter_downstream, args.genome)
+    genome_filter = None
+    if args.environment_file:
+        environment = json.loads(Path(args.environment_file).read_text())
+        reference = environment['reference']
+        if normalize_genome(reference['genome']) != normalize_genome(args.genome):
+            parser.error('Mapping environment genome differs from annotation genome')
+        genome_filter = GenomeFilter(args.genome, reference['blacklist_bed'], reference['blacklist_genome'])
+        if genome_filter.sha256 != environment['genome_filter']['blacklist_sha256']:
+            parser.error('Blacklist changed since mapping QC; use the original mapping blacklist')
+    elif args.blacklist:
+        genome_filter = GenomeFilter(args.genome, args.blacklist, args.genome)
     annotated_chromosomes = {chrom for chrom, gene in annotation.genes}
     occupied = {chrom for sample in sites for chrom, rows in sample.items() if rows}
     if occupied - annotated_chromosomes:
@@ -107,7 +121,7 @@ def main():
         genebody_molecules=('molecules', 'sum'), genebody_percentage=('percentage', lambda x: x.sum(min_count=1))).reset_index()
     body.to_csv(args.outdir / 'dsb_genebody.samples.tsv', sep='\t', index=False)
     gene_summary = write_gene_signal(annotation, args.samples, sites, metadata, args.outdir / 'GeneSignal',
-                                    args.gene_min_reps, args.gene_min_molecules)
+                                    args.gene_min_reps, args.gene_min_molecules, genome_filter=genome_filter)
     (args.outdir / 'annotation_gene_signal_mqc.json').write_text(json.dumps({
         'id': 'helixbusters_gene_signal', 'section_name': 'Helixbusters per-condition gene candidates',
         'description': 'Descriptive rankings with replicate support. Promoter, gene body and combined summaries. Ambiguous gene assignments excluded. No differential significance test. Lists: Analysis/Annotation/GeneSignal.',
