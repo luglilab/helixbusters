@@ -128,6 +128,18 @@ intervals do not overlap. Unique segments mean condition-specific detection,
 not statistically significant differential DSB signal. Empty sets are reported
 explicitly. A replicate consensus does not itself establish a consensus-level FDR.
 
+The final BAM sensitivity test is available through
+`scripts/compare_bam_peak_qvalues.py --source COMPLETED_OUTPUT --outdir NEW_OUTPUT`.
+It selects one strict accepted single-end alignment carrying the root UMI of each
+existing directional family, verifies the original molecule total and writes new
+indexed molecular BAMs. It runs `macs3 callpeak -f BAM -g hs --nomodel --extsize 80
+--keep-dup all` separately at q=0.05 and q=0.10, with default shift 0, local
+background and default peak merging parameters. Each branch has consensus >=2
+replicates and `Analysis/PeakOverlap`. This changes several peak-model settings
+and is an exploratory sensitivity test, not an isolated comparison of BAM/BED
+format. Raw mapped BAMs must not be substituted: they retain PCR duplicates and
+reads with ambiguous DSB ends. No mapping or molecular deduplication is rerun.
+
 `EXTRACT_UMI` runs `scripts/prepare_bliss_reads.py` automatically. It requires
 an exact barcode immediately after the initial UMI, removes both, and retains
 the UMI in the read name. `--barcode_orientation forward` uses the manifest
