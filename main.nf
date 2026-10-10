@@ -26,6 +26,8 @@ params.gtf = null
 params.gtf_genome = null
 params.promoter_upstream = 2000
 params.promoter_downstream = 500
+params.gene_min_reps = null
+params.gene_min_molecules = 2
 params.run_peak_calling = false
 params.window_sizes = '1000,5000,10000'
 params.min_reps_consensus = 2
@@ -274,8 +276,9 @@ process ANALYZE_REGIONS {
     def pcaCommand = windows && params.run_pca.toString() == 'true' ?
         "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/pca_windows.py --analysis-dir . --outdir PCA --windows ${windows.toString().split(',').join(' ')}" : ''
     def annotationPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') : ''
+    def geneMinimumReps = params.gene_min_reps != null ? params.gene_min_reps : params.min_reps_consensus
     def annotationCommand = annotation_gtf ?
-        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --analysis-dir . --outdir Annotation ${annotationPeaks}" : ''
+        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --gene-min-reps '${geneMinimumReps}' --gene-min-molecules '${params.gene_min_molecules}' --analysis-dir . --outdir Annotation ${annotationPeaks}" : ''
     def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
     def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
     def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
@@ -340,6 +343,11 @@ workflow {
         error '--promoter_upstream must be nonnegative and --promoter_downstream positive'
     }
     annotation_reference = params.gtf ? file(params.gtf, checkIfExists: true) : []
+    ['gene_min_molecules', 'gene_min_reps'].each { key ->
+        if (params[key] != null && !(params[key].toString() ==~ /[1-9][0-9]*/)) {
+            error "--${key} must be a positive integer"
+        }
+    }
     if (params.effective_genome_size.toString() == 'auto') {
         if (params.run_peak_calling.toString() == 'true' && !(params.genome in ['hg38', 'mm10'])) {
             error 'Provide --effective_genome_size for peak calling with this genome assembly'

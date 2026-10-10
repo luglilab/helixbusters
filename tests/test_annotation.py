@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from helixbusters.annotation import GTFAnnotation
+from helixbusters.gene_signal import write_gene_signal
 
 ROOT = Path(__file__).parents[1]
 
@@ -76,11 +77,45 @@ class TestAnnotation(unittest.TestCase):
             self.assertAlmostEqual(float(promoter['mean_percentage']), (100*9/27+100*7/9)/2)
             self.assertTrue((root/'Annotation/windows_10000.annotations.tsv').is_file())
             self.assertGreater((root/'Annotation/dsb_feature_distribution.pdf').stat().st_size,100)
+            with (root/'Annotation/GeneSignal/A.promoter.candidate_genes.tsv').open() as handle:
+                genes = list(csv.DictReader(handle, delimiter='\t'))
+            self.assertEqual([row['gene_id'] for row in genes], ['A'])
+            self.assertEqual(int(genes[0]['a_molecules']), 3)
+            self.assertEqual(int(genes[0]['b_molecules']), 7)
+            self.assertEqual(int(genes[0]['replicates_meeting_min_molecules']), 2)
+            self.assertAlmostEqual(float(genes[0]['mean_CPM']), (3/27 + 7/9) * 1e6 / 2)
+            with (root/'Annotation/GeneSignal/A.gene_body.candidate_genes.tsv').open() as handle:
+                genes = list(csv.DictReader(handle, delimiter='\t'))
+            self.assertEqual(int(genes[0]['a_molecules']), 9)
+            self.assertEqual(int(genes[0]['b_molecules']), 2)
             if shutil.which('multiqc'):
                 result=subprocess.run(['multiqc',str(root/'Annotation'),'--outdir',str(root/'MultiQC')],capture_output=True,text=True,timeout=60)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertIn('helixbusters_annotation_samples',result.stderr)
                 self.assertIn('helixbusters_annotation_conditions',result.stderr)
+                self.assertIn('helixbusters_gene_signal',result.stderr)
+
+    def test_ambiguous_genes_are_not_double_counted_and_support_is_not_relaxed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture_gtf(root / 'genes.gtf')
+            with (root / 'genes.gtf').open('a') as handle:
+                for feature, start, end in [('gene',100,300), ('transcript',100,300), ('exon',100,120)]:
+                    handle.write(f'chr1\ttest\t{feature}\t{start+1}\t{end}\t.\t+\t.\tgene_id "C";\n')
+            annotation = GTFAnnotation(root / 'genes.gtf', [('chr1',1000)],20,5)
+            metadata = {'s': {'sample':'s','group':'single','replicate':'R1','donor':''}}
+            sites = [{'chr1':[(79,2),(80,3),(595,5)]}]
+            result = write_gene_signal(annotation,['s'],sites,metadata,root/'GeneSignal',2,2)
+            with (root/'GeneSignal/gene_assignment.samples.tsv').open() as handle:
+                audit = next(csv.DictReader(handle,delimiter='\t'))
+            self.assertEqual(int(audit['unique_gene_molecules']),5)
+            self.assertEqual(int(audit['ambiguous_gene_molecules']),3)
+            self.assertEqual(int(audit['intergenic_molecules']),2)
+            self.assertEqual(result['single_promoter']['supported_candidates'],0)
+            with (root/'GeneSignal/single.promoter.ranked_genes.tsv').open() as handle:
+                ranked=list(csv.DictReader(handle,delimiter='\t'))
+            self.assertEqual([r['gene_id'] for r in ranked],['B'])
+            self.assertEqual(int(ranked[0]['pooled_molecules']),5)
 
 if __name__ == '__main__':
     unittest.main()

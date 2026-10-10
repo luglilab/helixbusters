@@ -17,6 +17,7 @@ from helixbusters.annotation import FEATURES, GTFAnnotation
 from helixbusters.genomes import canonical_lengths, normalize_genome
 from helixbusters.regions import load_sites
 from helixbusters.reporting import validate_label
+from helixbusters.gene_signal import write_gene_signal
 
 
 def write_regions(annotation, regions, destination):
@@ -41,12 +42,16 @@ def main():
     parser.add_argument('--genome', required=True)
     parser.add_argument('--promoter-upstream', type=int, default=2000)
     parser.add_argument('--promoter-downstream', type=int, default=500)
+    parser.add_argument('--gene-min-reps', type=int, default=2)
+    parser.add_argument('--gene-min-molecules', type=int, default=2)
     parser.add_argument('--analysis-dir', type=Path, default=Path('.'))
     parser.add_argument('--peak-files', nargs='+')
     parser.add_argument('--outdir', type=Path, required=True)
     args = parser.parse_args()
     if args.outdir.exists():
         parser.error('Choose a new output directory; existing results are protected')
+    if args.gene_min_reps < 1 or args.gene_min_molecules < 1:
+        parser.error('Gene support thresholds must be positive integers')
     if normalize_genome(args.genome) != normalize_genome(args.gtf_genome):
         parser.error('GTF genome must match the mapping genome')
     if len(set(args.samples)) != len(args.samples) or not len(args.samples) == len(args.counts) == len(args.headers):
@@ -101,6 +106,13 @@ def main():
     body = samples[samples.feature.isin(['exon', 'intron'])].groupby('sample', sort=False).agg(
         genebody_molecules=('molecules', 'sum'), genebody_percentage=('percentage', lambda x: x.sum(min_count=1))).reset_index()
     body.to_csv(args.outdir / 'dsb_genebody.samples.tsv', sep='\t', index=False)
+    gene_summary = write_gene_signal(annotation, args.samples, sites, metadata, args.outdir / 'GeneSignal',
+                                    args.gene_min_reps, args.gene_min_molecules)
+    (args.outdir / 'annotation_gene_signal_mqc.json').write_text(json.dumps({
+        'id': 'helixbusters_gene_signal', 'section_name': 'Helixbusters per-condition gene candidates',
+        'description': 'Descriptive rankings with replicate support. Promoter, gene body and combined summaries. Ambiguous gene assignments excluded. No differential significance test. Lists: Analysis/Annotation/GeneSignal.',
+        'plot_type': 'table', 'pconfig': {'id': 'helixbusters_gene_signal_table', 'title': 'Replicate-supported gene signal'},
+        'data': gene_summary}, indent=2) + '\n')
     for path in sorted(args.analysis_dir.glob('*.counts.tsv')):
         if not (path.name.startswith('windows_') or path.name == 'peaks_consensus.counts.tsv'):
             continue

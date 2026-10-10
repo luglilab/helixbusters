@@ -311,6 +311,51 @@ background must account for genomic opportunity, blacklist exclusions and
 mappability; no such background or significance test is fitted here. Use a new
 output directory on resumed runs to preserve previous results.
 
+## Final per-condition gene signal lists
+
+When GTF annotation is enabled, `Analysis/Annotation/GeneSignal` also contains
+independent per-condition gene rankings and replicate-supported candidate lists:
+
+- `CONDITION.promoter.candidate_genes.tsv`: reproducible promoter-associated DSB signal.
+- `CONDITION.gene_body.candidate_genes.tsv`: reproducible exon/intron DSB signal,
+  excluding sites assigned to any promoter.
+- `CONDITION.combined.candidate_genes.tsv`: an additional promoter-plus-body summary.
+- Corresponding `ranked_genes.tsv` files preserve all genes with observed signal,
+  including those below the support threshold. Wide `genes.CONTEXT.counts.tsv`
+  and `genes.CONTEXT.CPM.tsv` files preserve all annotated genes, including zeros.
+
+Each ranking includes gene ID, name, biotype, coordinates, uniquely assignable
+length, integer molecule counts and CPM per sample, condition mean/median/SD,
+replicate support and descriptive CPM per kb. CPM divides by all retained
+deduplicated molecules in each sample, not only gene-assigned molecules.
+Condition summaries give biological samples equal weight. Zero-depth samples
+have undefined CPM and are excluded from normalized condition summaries.
+
+By default, a candidate requires at least `--gene_min_molecules 2` in at least
+`--min_reps_consensus` biological samples of that condition (default two).
+Use `--gene_min_reps` to set an independent gene-support threshold. A group
+with too few replicates has an empty candidate list; thresholds are never
+silently relaxed. Rankings place supported candidates first, then sort by
+median sample CPM, mean sample CPM and stable gene ID/chromosome tie-breaks.
+The support filter is exploratory and does not establish significance.
+
+Gene counting uses only genes overlapping the highest-priority site category:
+promoter, then exon, then intron. A site with multiple candidate genes is
+excluded from integer gene counts and recorded in `ambiguous_gene_sites.tsv`.
+`gene_assignment.samples.tsv` audits unique, ambiguous and intergenic molecules;
+their sum conserves the retained sample total. This avoids assigning the same
+DSB to several genes. Promoter and body lists are alternatives to the combined
+summary; they are not additional independent molecules.
+
+These are descriptive DSB-associated gene candidates, not differentially
+damaged genes or differentially expressed genes. Larger features have more
+opportunity to accumulate ends. The reported assignable lengths and CPM per kb
+are not corrected for blacklist or mappability and do not establish enrichment.
+Condition comparisons require a separate replicate-aware differential model,
+confirmed donor structure, suitable normalization, abundance filtering and
+multiple-testing correction. No p-values or FDR are fabricated here.
+MultiQC includes a summary of candidates and replicate thresholds.
+
 ## Genomic-window PCA
 
 With `--run_windows`, the pipeline also generates exploratory per-sample PCA
