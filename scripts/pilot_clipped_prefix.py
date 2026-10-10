@@ -72,6 +72,7 @@ def main():
     p.add_argument('--genome', default='hg38')
     p.add_argument('--outdir', type=Path, required=True)
     p.add_argument('--max-reads', type=int, default=50000)
+    p.add_argument('--all-reads', action='store_true', help='Use every primary mapped read in each source BAM; no subsampling')
     p.add_argument('--seed', type=int, default=1729)
     p.add_argument('--motif', default='CCCTATAGTGAGTCGTAT')
     p.add_argument('--map-threads', type=int, default=6)
@@ -88,33 +89,37 @@ def main():
               'candidate_rule': '5-prime soft clip of 12..motif_length-1 bases exactly matching the motif prefix; clip mean Q>=30; next five bases Q>=20; remaining insert >=40; no spliced CIGAR',
               'interpretation': 'Pilot only. Remapping concordance does not independently establish true DSB coordinates. Primary pipeline is unchanged. UMI and strict endpoint policies remain enabled.',
               'parameters': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, 'samples': {}}
+    if args.all_reads:
+        report['sampling'] = 'All primary mapped reads from each previously filtered BAM; rescue remains conditional on original mapping'
     rows = []
     for sample in args.samples:
         source = args.single_replicate_dir / sample
         bams = list((source / 'mapping').glob(f'{sample}.q*.bam'))
         if len(bams) != 1:
             raise ValueError(f'Expected one filtered BAM for {sample}')
-        reads, seen = reservoir_bam(bams[0], args.max_reads, args.seed)
+        reads, seen = reservoir_bam(bams[0], sys.maxsize if args.all_reads else args.max_reads, args.seed)
         if not reads:
             raise ValueError('Empty pilot cohort')
         folder = args.outdir / sample; folder.mkdir()
         changed = write_cohort(reads, folder, args.motif)
+        cohort_size = len(reads)
+        del reads  # Release BAM records before remapping complete libraries.
         results, endpoints = {}, {}
         for branch in ('baseline', 'candidate_trim'):
-            print(f'{sample}: {branch}; {len(reads):,} reads, {len(changed):,} correction candidates', flush=True)
+            print(f'{sample}: {branch}; {cohort_size:,} reads, {len(changed):,} correction candidates', flush=True)
             output = folder / branch
             mapped = map_sample(sample, folder / f'{branch}.fastq.gz', reference['genome_index'], output,
                                 aligner='bwa', min_mapq=20, threads=args.map_threads, sort_threads=args.sort_threads,
                                 genome=reference['genome'], blacklist_bed=reference['blacklist_bed'], blacklist_genome=reference['blacklist_genome'])
             mapping_qc = json.loads(Path(mapped['MappingQC']).read_text())
-            if mapping_qc['primary_records'] != len(reads):
+            if mapping_qc['primary_records'] != cohort_size:
                 raise ValueError('Remapping primary count differs from the shared cohort size')
             dedup = deduplicate_bam(mapped['BamFilteredPath'], output / f'{sample}.families.tsv', output / f'{sample}.counts.bed',
                                    method='directional', min_mapq=20, five_prime_policy='strict',
                                    output_qc=output / f'{sample}.dedup.json')
             endpoints[branch] = accepted_reads(mapped['BamFilteredPath'])
             results[branch] = dedup
-            rows.append({'sample': sample, 'branch': branch, 'cohort_reads': len(reads), 'candidate_reads': len(changed),
+            rows.append({'sample': sample, 'branch': branch, 'cohort_reads': cohort_size, 'candidate_reads': len(changed),
                          'strict_accepted_reads': dedup['accepted_reads'], 'molecules': dedup['deduplicated_molecules']})
         shared = compare_reads(endpoints['baseline'], endpoints['candidate_trim'])
         newly_accepted = endpoints['candidate_trim'].keys() - endpoints['baseline'].keys()
@@ -130,7 +135,7 @@ def main():
                 record = endpoints['candidate_trim'][name]
                 writer.writerow([name, name in changed, changed.get(name, {}).get('removed_bases', 0), *record['key'], record['mapq'], record['nm'],
                                  name in changed and tuple(changed[name]['source_aligned_endpoint']) == record['key']])
-        report['samples'][sample] = {'source_filtered_reads': seen, 'cohort_reads': len(reads), 'candidate_reads': len(changed),
+        report['samples'][sample] = {'source_filtered_reads': seen, 'cohort_reads': cohort_size, 'candidate_reads': len(changed),
                                      'baseline': results['baseline'], 'candidate_trim': results['candidate_trim'],
                                      'shared_endpoint_comparison': shared, 'newly_strict_accepted': len(newly_accepted),
                                      'new_endpoint_matches_source_aligned_boundary': source_agreement,

@@ -45,11 +45,12 @@ class TestRecoveryAudit(unittest.TestCase):
                     bam.write(read)
             argv = ['pilot_clipped_prefix.py', '--single-replicate-dir', str(root / 'SingleReplicate'),
                     '--samples', 'toy', '--reference-config', str(root / 'references.json'),
-                    '--outdir', str(root / 'pilot'), '--max-reads', '100', '--map-threads', '1', '--sort-threads', '0']
+                    '--outdir', str(root / 'pilot'), '--all-reads', '--max-reads', '1', '--map-threads', '1', '--sort-threads', '0']
             reference = {'genome': None, 'genome_index': str(fasta), 'blacklist_bed': None, 'blacklist_genome': None}
             with patch.object(sys, 'argv', argv), patch.object(pilot_clipped_prefix, 'load_reference_config', return_value=reference):
                 pilot_clipped_prefix.main()
             report = json.loads((root / 'pilot/pilot.json').read_text())['samples']['toy']
+            self.assertEqual(report['cohort_reads'], 20)
             self.assertEqual(report['candidate_reads'], 10)
             self.assertEqual(report['candidate_trim']['deduplicated_molecules'], 20)
             self.assertEqual(report['new_endpoint_matches_source_aligned_boundary'], report['newly_strict_accepted'])
