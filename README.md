@@ -332,6 +332,35 @@ DESeq2 analysis after an R preflight. Compare effects on shared tested features;
 branch-specific abundance filters can change the tested feature set. Production
 defaults and original analysis outputs remain unchanged.
 
+### Full T7 boundary check
+
+The exclusion motif `CCCTATAGTGAGTCGTAT` has 18 bases. The full reverse
+complement of the 20-base T7 sequence `TAATACGACTCACTATAGGG` is
+`CCCTATAGTGAGTCGTATTA`. Exclusion by the shorter motif does not require knowing
+the insert boundary, but removing only those 18 bases can leave technical `TA`
+at the read start. CIGAR `M` can include mismatches; strict terminal alignment
+alone does not establish a clean genomic first base.
+
+```bash
+python scripts/inspect_full_prefix_boundary.py \
+  --audit-dir /path/to/original_audit --outdir /path/to/new/boundary_diagnostics
+```
+
+This diagnoses strand-aware MD mismatches in the first ten sequenced bases and
+residual T7 motifs in existing production-retained versus exact-prefix-trim BAMs.
+It prepares matched 18/20-base-removal FASTQs, requiring the exact full 20-base
+reverse T7 prefix, a >=40-base tail and the next five bases >=Q20 without N.
+Exact 12-base prefixes of either T7 orientation within the first 60 tail bases
+exclude the read from both comparison arms. Original files are read-only.
+
+Add `--reference-config references_hg38.json --map-threads 6 --sort-threads 1`
+to run both BWA mappings on each identical cohort. Outputs include
+`boundary.json`, `strict_reads.boundary.tsv`, per-sample classification and,
+when mapping is enabled, `boundary.metrics.tsv` plus shared endpoint comparisons
+and branch BAM/QC/molecule files. A 2-base endpoint shift can be consistent with
+removing the residual technical suffix, but is not independent physical DSB
+validation. This remains experimental and does not change production trimming.
+
 ## Differential relative DSB signal and robustness
 
 Enable an explicit contrast using `--run_differential --design paired
