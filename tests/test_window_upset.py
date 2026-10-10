@@ -10,6 +10,18 @@ from window_upset import run
 
 
 class TestWindowUpSet(unittest.TestCase):
+    def test_input_titration_uses_technical_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.setup_input(root)
+            metadata=pd.read_csv(root/'analysis.samples.tsv',sep='\t')
+            metadata['group']=['1M','500k','100k','25k'];metadata['donor']='D1';metadata['replicate']='R1'
+            metadata.to_csv(root/'analysis.samples.tsv',sep='\t',index=False)
+            source=json.loads((root/'analysis.summary.json').read_text());source['analysis_purpose']='input_titration'
+            (root/'analysis.summary.json').write_text(json.dumps(source))
+            result=run(root,root/'overlap',[10],minimum_replicates=1,iterations=3)
+            self.assertIn('not biological replicates',result['interpretation'])
+            self.assertIn('technical', (root/'overlap/README.md').read_text().lower())
+
     def setup_input(self,root):
         names=['a1','a2','b1','b2']
         pd.DataFrame({'sample':names,'group':['A','A','B','B'],'replicate':['R1','R2','R1','R2'],

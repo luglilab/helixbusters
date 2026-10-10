@@ -65,13 +65,18 @@ def run(analysis_dir,outdir,widths,minimum_molecules=5,minimum_replicates=2,
     if any(len(cols)<minimum_replicates for cols in groups.values()):
         raise ValueError('Support threshold exceeds biological replicate count of a condition')
     source=json.loads((analysis_dir/'analysis.summary.json').read_text())
+    purpose=source.get('analysis_purpose','biological')
+    support_label='technical input-level support' if purpose=='input_titration' else 'replicate support'
     totals=np.array([source['samples'][n]['molecules'] for n in names],dtype=np.int64)
     outdir.mkdir(parents=True)
     summary={'interpretation':'Descriptive overlap of replicate-supported signal; no enrichment test or differential claim.',
+             'analysis_purpose':purpose,
              'parameters':{'minimum_molecules':minimum_molecules,'minimum_replicates':minimum_replicates,
                            'iterations':iterations,'seed':seed,'equal_depth_minimum_frequency':minimum_frequency},
              'library_molecules':dict(zip(names,map(int,totals))),
              'metadata_sha256':sha256(analysis_dir/'analysis.samples.tsv'),'windows':{}}
+    if purpose=='input_titration':
+        summary['interpretation']='Descriptive technical input-level overlap from one donor. Input levels are not biological replicates; no biological consensus or differential inference.'
     mqc={}
     for width in sorted(set(widths)):
         path=analysis_dir/f'windows_{width}.counts.tsv'
@@ -89,7 +94,7 @@ def run(analysis_dir,outdir,widths,minimum_molecules=5,minimum_replicates=2,
             output[g+'_supporting_replicates']=(raw[:,cols]>=minimum_molecules).sum(axis=1)
             output[g+'_supported']=membership[g]
         full=folder/'full_depth';full.mkdir()
-        full_rows=write_intersections(table,membership,full,f'{width/1000:g} kb | full-depth support')
+        full_rows=write_intersections(table,membership,full,f'{width/1000:g} kb | full-depth {support_label}')
         record={'input_sha256':sha256(path),'observed_windows':len(table),'full_depth':full_rows}
         for row in full_rows:mqc[f'{width}_full_'+row['conditions']]={'windows':row['windows'],'covered_bp':row['covered_bp']}
         if (totals>0).all():
@@ -99,7 +104,7 @@ def run(analysis_dir,outdir,widths,minimum_molecules=5,minimum_replicates=2,
                 output[g+'_equal_depth_support_frequency']=freq[g]
                 output[g+'_equal_depth_stable']=stable[g]
             equal=folder/'equal_depth';equal.mkdir()
-            record['equal_depth']=write_intersections(table,stable,equal,f'{width/1000:g} kb | equal-depth stable support')
+            record['equal_depth']=write_intersections(table,stable,equal,f'{width/1000:g} kb | equal-depth {support_label}')
             record['equal_depth_molecules']=int(target)
             pd.DataFrame(draws).to_csv(equal/'support_draws.tsv',sep='\t',index=False)
             for row in record['equal_depth']:mqc[f'{width}_equal_'+row['conditions']]={'windows':row['windows'],'covered_bp':row['covered_bp']}
@@ -110,7 +115,7 @@ def run(analysis_dir,outdir,widths,minimum_molecules=5,minimum_replicates=2,
     (outdir/'window_upset_mqc.json').write_text(json.dumps({'id':'helixbusters_window_overlap',
         'section_name':'Helixbusters supported-window overlap','description':summary['interpretation'],
         'plot_type':'table','pconfig':{'id':'helixbusters_window_overlap_table','title':'Window overlap and depth sensitivity'},'data':mqc},indent=2)+'\n')
-    (outdir/'README.md').write_text('Fixed windows are matched by chromosome/start/end and never merged. Full-depth support requires the stated molecule threshold in the stated number of biological replicates within each condition. Equal-depth support requires that rule in at least 80% of 50 draws by default. All libraries are sampled to the smallest library, without replacement; seed and settings are recorded. Neither support nor resampling establishes statistical enrichment or a condition difference. Unique means supported in only one condition under this rule, not absence of reads in the other condition.\n')
+    (outdir/'README.md').write_text(summary['interpretation'] + '\n' + 'Fixed windows are matched by chromosome/start/end and never merged. Full-depth support requires the stated molecule threshold in the stated number of libraries within each group (biological replicates only for biological analyses). Equal-depth support requires that rule in at least 80% of 50 draws by default. All libraries are sampled to the smallest library, without replacement; seed and settings are recorded. Neither support nor resampling establishes statistical enrichment or a condition difference. Unique means supported in only one condition under this rule, not absence of reads in the other condition.\n')
     return summary
 
 

@@ -726,3 +726,37 @@ The time-course mode provides descriptive donor influence; equal-depth support
 remains available in WindowOverlap, rather than being refitted as a temporal
 significance test. Disable differential analysis for functional small-subset
 tests and one-donor input titrations.
+
+## Layout and read-retention QC
+
+The pipeline now checks the configured inline barcode before preparing each
+library (`--validate_layout true`, default). It reads the first 10,000 records
+(`--layout_max_reads`), checks both orientations at the declared UMI-length
+offset, and requires at least 10% exact configured matches
+(`--layout_minimum_fraction 0.1`) with no stronger alternative orientation.
+These are configurable diagnostic thresholds, not a definition of library
+quality. A failed library stops before mapping; inspect its `.layout.json`
+in the failed task directory before changing metadata or thresholds. The check
+does not silently reverse barcodes or establish biological sample identity.
+`--validate_layout false` explicitly disables it. Layout JSON reports are
+published under SingleReplicate/sample/qc and included in MultiQC.
+
+MultiQC also reports `helixbusters_read_flow.tsv`: preparation losses, mapping
+exclusions, ambiguous 5prime reads and UMI duplicates, expressed relative to
+original input reads. Ambiguous 5prime additionally uses the retained-alignment
+denominator. Supplementary alignment records are not independent input reads.
+The largest recorded loss is descriptive; no QC flag automatically removes a
+library or relaxes its filters. Exact20 rescued reads are already included in
+preparation outputs and are not counted twice.
+
+PCA MultiQC rows include minimum/maximum molecular depth, their fold range and
+a descriptive depth-association flag (absolute PC1/PC2 correlation with original
+log10 library depth >=0.7). Inspect the original and equal-depth panels together;
+this threshold is not a statistical significance test.
+
+For one-donor input titration, use `--analysis_purpose input_titration --design
+unspecified --run_differential false --gene_min_reps 1 --window_min_reps 1`.
+The manifest must declare exactly one donor and one library per input level.
+Design, annotation and UpSet reports explicitly label technical support rather
+than biological consensus. The updated four-experiment smoke-test script sets
+this purpose for EXP3. Existing runs default to `analysis_purpose=biological`.

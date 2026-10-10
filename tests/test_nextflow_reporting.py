@@ -14,7 +14,7 @@ STUBS = {
     'DIFFERENTIAL_DSB': 'mkdir Differential\n    touch Differential/differential_mqc.json Differential/differential.summary.json',
     'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p PCA\n    touch PCA/pca_mqc.json PCA/windows_PCA.pdf',
     "CHECK_ENVIRONMENT": "echo '{}' > environment.json\n    touch design.summary.json design.metadata.tsv design.metadata_mqc.json",
-    "EXTRACT_UMI": "touch ${meta.sample}.umi.fastq.gz ${meta.sample}.preparation.json ${meta.sample}.preparation_mqc.json",
+    "EXTRACT_UMI": "touch ${meta.sample}.umi.fastq.gz ${meta.sample}.preparation.json ${meta.sample}.preparation_mqc.json\n    if [ '${params.validate_layout}' = true ]; then touch ${meta.sample}.layout.json ${meta.sample}.layout_mqc.json; fi",
     "MAP_READS": """touch ${meta.sample}.q${params.mapq}.bam ${meta.sample}.q${params.mapq}.bam.bai
     touch ${meta.sample}.all.bam ${meta.sample}.all.bam.bai ${meta.sample}.mapping.json
     echo ${task.cpus} > ${meta.sample}.cpu.log""",
@@ -38,6 +38,9 @@ STUBS = {
 
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
+    def test_layout_check_can_be_disabled(self):
+        self.test_three_samples_two_conditions_and_integer_cpu_requests(
+            ['--run_windows', '--validate_layout', 'false'])
     def test_timecourse_wiring(self):
         self.test_three_samples_two_conditions_and_integer_cpu_requests(
             ['--run_windows', '--run_differential', '--design', 'paired',
@@ -119,6 +122,8 @@ class TestNextflowReporting(unittest.TestCase):
                 self.assertFalse((outputs / 'SingleReplicate' / 'a' / 'peaks').exists())
                 self.assertEqual((outputs / 'Analysis/WindowOverlap/window_upset.summary.json').is_file(), '--run_windows' in analysis_options)
             for sample, _, _ in members:
+                self.assertEqual((outputs / 'SingleReplicate' / sample / 'qc' / f'{sample}.layout.json').exists(),
+                                 not ('--validate_layout' in analysis_options and 'false' in analysis_options))
                 self.assertEqual((outputs / "SingleReplicate" / sample / "mapping" / f"{sample}.cpu.log").read_text().strip(), "11")
                 self.assertTrue((outputs / "SingleReplicate" / sample / "bigwig" / f"{sample}.ends.CPM.bw").is_file())
             for group in sorted({m[1] for m in members}):

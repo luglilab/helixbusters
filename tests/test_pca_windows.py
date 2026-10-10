@@ -45,6 +45,10 @@ class TestWindowPCA(unittest.TestCase):
             self.assertEqual(list(window['library_molecules'].values()), counts.sum(axis=1).tolist())
             self.assertGreater((a / 'windows_PCA.pdf').stat().st_size, 100)
             self.assertEqual(json.loads((a / 'pca_mqc.json').read_text())['plot_type'], 'table')
+            diagnostics = json.loads((a / 'pca_mqc.json').read_text())['data']['10000_bp_logCPM']
+            self.assertEqual(diagnostics['minimum_library_molecules'], int(counts.sum(axis=1).min()))
+            self.assertEqual(diagnostics['maximum_library_molecules'], int(counts.sum(axis=1).max()))
+            self.assertIsInstance(diagnostics['depth_association_flag'], bool)
 
     def test_insufficient_samples_and_empty_library_are_reported(self):
         for counts, reason in [(np.ones((2, 5), dtype=int), 'Fewer than three samples'),

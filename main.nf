@@ -10,6 +10,10 @@ params.reference_config = null
 params.aligner = 'bwa'
 params.umi_length = 8
 params.barcode_orientation = 'forward'
+params.validate_layout = true
+params.layout_max_reads = 10000
+params.layout_minimum_fraction = 0.1
+params.analysis_purpose = 'biological'
 params.minimum_insert_length = 20
 params.technical_prefix = ''
 params.technical_prefix_max_errors = 0
@@ -65,7 +69,7 @@ process CHECK_ENVIRONMENT {
     """
     ${differentialCheck}
     python ${projectDir}/scripts/validate_experimental_design.py \\
-        --manifest '${manifest_file}' --design '${params.design}'
+        --manifest '${manifest_file}' --design '${params.design}' --purpose '${params.analysis_purpose}'
     python ${projectDir}/scripts/post_mapping.py check \\
         --reference-config '${reference_config}' --genome '${genome}' --aligner '${aligner}'
     """
@@ -76,7 +80,7 @@ process EXTRACT_UMI {
     label 'small'
     cpus 2
     publishDir "${params.outdir}/prepared", mode: 'copy'
-    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/qc" }, mode: 'copy', pattern: '*.preparation*.json'
+    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/qc" }, mode: 'copy', pattern: '*.{preparation,preparation_mqc,layout,layout_mqc}.json'
 
     input:
     tuple val(meta), val(barcode), path(reads)
@@ -86,9 +90,13 @@ process EXTRACT_UMI {
     tuple val(meta), path("${meta.sample}.umi.fastq.gz"), emit: prepared
     path "${meta.sample}.preparation.json", emit: preparation_qc
     path "${meta.sample}.preparation_mqc.json", emit: preparation_multiqc
+    path "${meta.sample}.layout*.json", optional: true, emit: layout_qc
 
     script:
+    def layoutCheck = params.validate_layout.toString() == 'true' ?
+        "python ${projectDir}/scripts/validate_read_layout.py --reads '${reads}' --sample '${meta.sample}' --barcode '${barcode}' --orientation '${params.barcode_orientation}' --umi-length '${params.umi_length}' --max-reads '${params.layout_max_reads}' --minimum-fraction '${params.layout_minimum_fraction}'" : ''
     """
+    ${layoutCheck}
     python ${projectDir}/scripts/prepare_bliss_reads.py \\
         --reads '${reads}' --sample '${meta.sample}' --barcode '${barcode}' \\
         --barcode-orientation '${params.barcode_orientation}' --umi-length '${params.umi_length}' \\
@@ -321,9 +329,12 @@ process MULTIQC {
     script:
     def sampleArgs = samples.collect { "'${it}'" }.join(' ')
     def conditionArgs = conditions.collect { "'${it}'" }.join(' ')
+    def preparationArgs = preparation_reports.collect { "'${it}'" }.join(' ')
     """
     python ${projectDir}/scripts/post_mapping.py report \\
         --samples ${sampleArgs} --conditions ${conditionArgs} --genome '${params.genome}'
+    python ${projectDir}/scripts/qc_read_flow.py \\
+        --samples ${sampleArgs} --preparations ${preparationArgs} --purpose '${params.analysis_purpose}'
     multiqc . --filename multiqc_report.html --outdir . --data-dir --cl-config 'data_dir_name: multiqc_data' --config helixbusters_multiqc_config.json
     multiqc --version > reporting_versions.txt
     samtools --version >> reporting_versions.txt
@@ -331,6 +342,13 @@ process MULTIQC {
 }
 
 workflow {
+    if (!(params.analysis_purpose in ['biological', 'input_titration'])) { error '--analysis_purpose must be biological or input_titration' }
+    if (params.analysis_purpose == 'input_titration' && (params.design != 'unspecified' || params.run_differential.toString() != 'false')) {
+        error 'Input titration requires --design unspecified and --run_differential false'
+    }
+    if (!(params.validate_layout.toString() in ['true', 'false'])) { error '--validate_layout must be true or false' }
+    if (!(params.layout_max_reads.toString() ==~ /[1-9][0-9]*/) || params.layout_max_reads.toLong() > Integer.MAX_VALUE) { error '--layout_max_reads must be a positive integer' }
+    if (!(params.layout_minimum_fraction.toString() ==~ /[0-9.eE+-]+/) || (params.layout_minimum_fraction as Double) <= 0 || (params.layout_minimum_fraction as Double) > 1) { error '--layout_minimum_fraction must be in (0,1]' }
     if (!params.manifest || !params.genome || !params.reference_config) {
         error 'Provide --manifest, --genome and --reference_config (see docs/nextflow.md)'
     }
@@ -512,5 +530,5 @@ workflow {
     }
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),
             conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect(),
-            prepared.preparation_multiqc.collect(), environment.design_metadata.flatten().collect(), analysis_reports.collect().ifEmpty([]))
+            prepared.preparation_multiqc.mix(prepared.preparation_qc).mix(prepared.layout_qc).flatten().collect(), environment.design_metadata.flatten().collect(), analysis_reports.collect().ifEmpty([]))
 }

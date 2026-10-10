@@ -32,6 +32,7 @@ def main():
     if args.top_features < 2:
         parser.error('--top-features must be >=2')
     metadata = pd.read_csv(args.analysis_dir / 'analysis.samples.tsv', sep='\t', keep_default_na=False)
+    analysis_purpose = json.loads((args.analysis_dir / 'analysis.summary.json').read_text()).get('analysis_purpose', 'biological') if (args.analysis_dir / 'analysis.summary.json').exists() else 'biological'
     if metadata['sample'].duplicated().any() or len(metadata) < 1:
         raise ValueError('Sample metadata must be nonempty and unique')
     names = metadata['sample'].tolist()
@@ -40,6 +41,7 @@ def main():
     palette = dict(zip(sorted(set(groups)), plt.get_cmap('tab10').colors))
     fig, axes = plt.subplots(2, len(args.windows), figsize=(6 * len(args.windows), 10), squeeze=False)
     summary = {'parameters': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+               'analysis_purpose': analysis_purpose,
                'interpretation': 'Exploratory PCA, not a condition test. Donor pairing is not inferred. All-zero bins are omitted upstream. CPM measures relative genomic allocation, not absolute DSB burden.',
                'windows': {}, 'versions': {'numpy': np.__version__, 'pandas': pd.__version__, 'matplotlib': matplotlib.__version__}}
     coordinates = []
@@ -110,6 +112,10 @@ def main():
             record['panels'][label] = {'explained_variance_ratio': explained.tolist(),
                                       'correlation_PC_with_original_log10_library_size': correlations}
             multiqc[f'{width}_bp_{label}'] = {'PC1_variance_pct': float(explained[0] * 100),
+                'analysis_purpose': analysis_purpose,
+                'minimum_library_molecules': int(totals.min()), 'maximum_library_molecules': int(totals.max()),
+                'library_depth_fold_range': float(totals.max() / totals.min()),
+                'depth_association_flag': any(abs(r) >= .7 for r in correlations if r is not None),
                 'PC2_variance_pct': float(explained[1] * 100), 'PC1_depth_correlation': correlations[0],
                 'PC2_depth_correlation': correlations[1], 'selected_windows': len(indices),
                 'sampling_depth': target if row else 'full library'}
@@ -143,12 +149,13 @@ def main():
     (args.outdir / 'pca.summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False) + '\n')
     (args.outdir / 'pca_mqc.json').write_text(json.dumps({
         'id': 'helixbusters_pca', 'section_name': 'Helixbusters genomic-window PCA',
-        'description': 'Exploratory per-sample PCA; full-library logCPM and equal-depth sensitivity. Figures and coordinates: Analysis/PCA. No differential test or donor pairing inferred.',
+        'description': 'Exploratory PCA; full-library and equal-depth panels: Analysis/PCA. Depth flag means absolute PC/depth correlation >=0.7, a descriptive diagnostic, not a test. Analysis purpose: ' + analysis_purpose,
         'plot_type': 'table', 'pconfig': {'id': 'helixbusters_pca_table', 'title': 'PCA variance and depth diagnostics'},
         'data': multiqc}, indent=2, allow_nan=False) + '\n')
     (args.outdir / 'README.md').write_text('''# Exploratory genomic-window PCA
 
-One point per biological sample. Columns: requested window sizes. Upper row:
+One point per library. For input_titration, input levels come from one donor and
+are not biological replicates. Columns: requested window sizes. Upper row:
 log2(1+CPM) of full-library counts. Lower row: equal-depth molecule sampling
 without replacement, then the same transformation. Both use the same windows
 selected by full-library variance after a condition-independent abundance filter.

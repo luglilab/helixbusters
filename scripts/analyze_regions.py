@@ -53,6 +53,7 @@ def main():
             p.error('min-reps-consensus must not exceed the replicate count of any condition')
     header, sites = load_sites(args.counts, args.headers)
     report = {'design': design['design'], 'model_formula': design['model_formula'],
+              'analysis_purpose': design.get('analysis_purpose', 'biological'),
               'status': 'exploratory region discovery and counting; no differential model fitted',
               'windows': {},
               'samples': {sample: {'molecules': sum(count for rows in sample_sites.values() for _, count in rows),

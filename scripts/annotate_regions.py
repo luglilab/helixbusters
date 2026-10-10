@@ -124,8 +124,8 @@ def main():
                                     args.gene_min_reps, args.gene_min_molecules, genome_filter=genome_filter)
     (args.outdir / 'annotation_gene_signal_mqc.json').write_text(json.dumps({
         'id': 'helixbusters_gene_signal', 'section_name': 'Helixbusters per-condition gene candidates',
-        'description': 'Descriptive rankings with replicate support. Promoter, gene body and combined summaries. Ambiguous gene assignments excluded. No differential significance test. Lists: Analysis/Annotation/GeneSignal.',
-        'plot_type': 'table', 'pconfig': {'id': 'helixbusters_gene_signal_table', 'title': 'Replicate-supported gene signal'},
+        'description': 'Descriptive rankings. Analysis purpose: ' + design.get('analysis_purpose', 'biological') + '. For input_titration, support refers to a single library per input level, not biological replication. Ambiguous gene assignments excluded; no differential significance test. Lists: Analysis/Annotation/GeneSignal.',
+        'plot_type': 'table', 'pconfig': {'id': 'helixbusters_gene_signal_table', 'title': 'Technical input-level gene signal' if design.get('analysis_purpose') == 'input_titration' else 'Replicate-supported gene signal'},
         'data': gene_summary}, indent=2) + '\n')
     for path in sorted(args.analysis_dir.glob('*.counts.tsv')):
         if not (path.name.startswith('windows_') or path.name == 'peaks_consensus.counts.tsv'):
