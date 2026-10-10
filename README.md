@@ -361,6 +361,44 @@ and branch BAM/QC/molecule files. A 2-base endpoint shift can be consistent with
 removing the residual technical suffix, but is not independent physical DSB
 validation. This remains experimental and does not change production trimming.
 
+### Complete-library exact20 rescue
+
+```bash
+python scripts/run_full_prefix_rescue.py \
+  --manifest samples.tsv --metadata paired_metadata.tsv \
+  --barcode-orientation reverse_complement \
+  --reference-config references_hg38.json --gtf gencode.annotation.gtf.gz \
+  --map-threads 6 --sort-threads 1 --outdir /path/to/new/exact20_full
+```
+
+This experimental runner scans each original demultiplexed FASTQ once. The
+`baseline` FASTQ reproduces the current production preparation (exact barcode,
+8-base UMI, whole-read technical exclusion using the 18-base motif with at most
+two edits, minimum retained insert 20 bases). `candidate_trim` contains the
+same retained reads plus eligible exact20 rescue reads, with all 20 technical
+bases removed. Eligibility reuses the matched boundary pilot rule above.
+The separate 12–17-base clipping correction is not applied in this comparison.
+
+Each full branch is independently mapped and **jointly deduplicated**; rescue
+and retained reads sharing a molecular UMI/site are counted together. Never add
+independently deduplicated branch yields. Sample/group/replicate must agree
+between manifest and explicit donor metadata; donors are validated as paired.
+Preparation counts conserve original reads and excluded technical categories.
+`read_provenance.tsv.gz` records retained versus rescued origin, read IDs and
+removed bases. Prepared identifiers are checked for uniqueness in memory per
+library, then released before mapping. Plan RAM for the largest prepared library
+and disk for two complete prepared/BAM branches; libraries run sequentially.
+
+Outputs include `pilot.json`, `full_rescue.metrics.tsv`, preparation reports,
+both mapping/deduplication branches, biological 5-prime mismatch diagnostics
+and unchanged-read endpoint comparisons. With `--gtf`, both branches also receive
+matched genomic windows, annotation and PCA under `Analysis/`. Add
+`--differential --contrast CHRONIC ACUTE` only with working DESeq2; an R preflight
+runs before scanning FASTQs. Otherwise differential analysis remains pending and
+can be run separately with `scripts/differential_dsb.py` on each branch's Analysis
+directory. Each output directory must be new. Primary Nextflow defaults and
+original inputs/results are preserved.
+
 ## Differential relative DSB signal and robustness
 
 Enable an explicit contrast using `--run_differential --design paired

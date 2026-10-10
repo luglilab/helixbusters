@@ -14,11 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helixbusters.deduplication import five_prime_position, deduplicate_bam
 from helixbusters.genomes import load_reference_config, GenomeFilter
 from helixbusters.mapping import map_sample, validate_index
+from helixbusters.technical import T7_FORWARD, T7_REVERSE, full_t7_rescue_reason
 from pilot_aligner_comparison import accepted_reads, compare_reads
-
-T7_REVERSE = 'CCCTATAGTGAGTCGTATTA'
-T7_FORWARD = 'TAATACGACTCACTATAGGG'
-
 
 def end_mismatches(read, length=10):
     """MD-backed reference comparison in biological 5-prime orientation."""
@@ -93,16 +90,9 @@ def prepare_comparison(source, outdir):
                 if len(umi) != 8 or set(umi) - set('ACGT'):
                     raise ValueError('Expected authoritative 8-base UMI suffix')
                 counts['input_reads'] += 1
-                if not sequence.startswith(T7_REVERSE):
-                    counts['not_exact_full20_prefix'] += 1
-                    continue
-                tail = sequence[20:]; tail_quality = quality[20:]
-                if len(tail) < 40:
-                    counts['short_tail'] += 1
-                elif 'N' in tail[:5] or min(ord(q) - 33 for q in tail_quality[:5]) < 20:
-                    counts['low_quality_boundary'] += 1
-                elif any(motif[:12] in tail[:60] for motif in (T7_FORWARD, T7_REVERSE)):
-                    counts['residual_T7_in_either_orientation'] += 1
+                reason = full_t7_rescue_reason(sequence, quality)
+                if reason:
+                    counts[reason] += 1
                 else:
                     counts['comparison_reads'] += 1
                     for branch, length in (('trim18', 18), ('trim20', 20)):
