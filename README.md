@@ -280,6 +280,58 @@ independently validated DSB coordinates; a yield increase alone does not authori
 adopting this correction. The cohort is conditional on original filtered mapping,
 so its yield cannot be interpreted as a whole-library gain.
 
+Use `--all-reads` to compare complete filtered libraries without subsampling.
+This loads one library's primary BAM records into memory, releases them before
+remapping, and processes libraries sequentially; plan RAM for the largest library.
+
+### Original FASTQ audit and full-prefix pilot
+
+```bash
+python scripts/audit_original_bliss.py \
+  --manifest samples.tsv --barcode-orientation reverse_complement \
+  --max-reads 100000 --seed 1729 --reference-config references_hg38.json \
+  --map-threads 6 --sort-threads 1 --outdir /path/to/new/original_audit
+```
+
+The reservoir scans each original FASTQ completely once; the selected reads are
+uniform across the file rather than the first records. Original files remain
+read-only. Exclusive preparation categories follow the production order:
+barcode, UMI, technical prefix (at most two edits), insert length. Barcode Hamming
+distances, competing manifest barcodes, quality and offset profiles are diagnostic
+only. The manifest may omit barcodes used elsewhere in the sequencing run, so a
+unique nearest manifest barcode does not establish safe reassignment.
+
+The mapping pilot keeps the production-retained subset separate from an excluded
+exact-prefix cohort. For that cohort it compares the original insert and removal
+of exactly one full technical motif. Eligibility requires a tail of at least 40
+bases, the next five bases >=Q20 without N, and no repeated motif-prefix of 12
+bases in the first 60 tail bases. Edited prefixes and repeated structures are
+reported but not corrected. The exact motif endpoint is an experimental boundary,
+not validated genomic sequence onset. Both mappings retain canonical/blacklist,
+MAPQ20, directional UMI deduplication and strict biological 5-prime policies.
+Do not add independently deduplicated branch yields to estimate unique combined
+molecules. Omitting `--reference-config` runs only the audit. `audit.json`,
+`audit.metrics.tsv`, sampled FASTQs and branch BAM/QC/counts are written to a new
+directory. Empty branches are reported and skipped.
+
+For matched downstream analysis of a completed `--all-reads` clipping experiment:
+
+```bash
+python scripts/analyze_prefix_sensitivity.py \
+  --sensitivity-dir /path/to/prefix_sensitivity \
+  --metadata paired_metadata.tsv --reference-config references_hg38.json \
+  --gtf gencode.annotation.gtf.gz --windows 10000,50000,100000 \
+  --outdir /path/to/new/sensitivity_annotation
+```
+
+Both complete branches receive the same explicitly paired metadata, windows,
+GENCODE annotation and blacklist. The blacklist checksum must match mapping QC
+for every sample/branch. No realignment or peak calling is performed here.
+Optional `--differential --contrast CHRONIC ACUTE` fits the existing paired
+DESeq2 analysis after an R preflight. Compare effects on shared tested features;
+branch-specific abundance filters can change the tested feature set. Production
+defaults and original analysis outputs remain unchanged.
+
 ## Differential relative DSB signal and robustness
 
 Enable an explicit contrast using `--run_differential --design paired
