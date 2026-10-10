@@ -258,6 +258,92 @@ remain the experimental units for subsequent inference. Low retained molecule
 counts and residual technical artifacts must be considered before interpreting
 hotspots biologically.
 
+## GTF annotation and DSB feature allocation
+
+Supply a complete gene/transcript/exon GTF for the same genome assembly:
+For the current hg38 experiments, use the pinned GENCODE human release 50
+comprehensive annotation on reference chromosomes (`gencode.v50.annotation.gtf.gz`,
+GRCh38.p14; [official release page](https://www.gencodegenes.org/human/)).
+
+```bash
+# Add these options to the existing pipeline command:
+--gtf /path/to/hg38.annotation.gtf.gz --gtf_genome hg38 \
+--promoter_upstream 2000 --promoter_downstream 500
+```
+
+Annotation can run with or without window analysis and peak calling. It uses
+retained deduplicated 1-bp DSB ends, not read-coverage BAMs or window midpoints.
+GTF coordinates are converted from 1-based inclusive to 0-based half-open;
+standard `chr1`/`1` aliases are matched without rewriting gene IDs or output
+chromosomes. The declared GTF genome must match the mapping genome; recognized
+build labels in GTF comments, chromosome bounds and occupied-contig coverage
+are checked. A build declaration and coordinate checks cannot independently
+prove the provenance of a mislabeled GTF. Original inputs are preserved.
+
+Each molecule is assigned once with priority **promoter > exon > intron >
+intergenic**. Promoters include all transcript TSS, using the strand-aware
+relative interval `[-upstream, downstream)`; a gene-span TSS is used when
+transcript records are absent. Exons are the union across all isoforms and
+overlapping genes; introns are gene-body bases outside any exon and promoter.
+CDS and UTR bases remain within the exon category. Gene-body totals are exon
+plus intron, with promoter bases excluded to preserve exclusive categories.
+All biotypes in the supplied GTF contribute. Enhancers cannot be identified
+from a gene GTF alone and are not inferred from intergenic DSBs.
+
+Outputs under `Analysis/Annotation` include:
+
+- Per-sample DSB site annotations with molecular counts, associated gene IDs,
+  gene names and biotypes.
+- Window and peak annotations with exact exclusive feature coverage in bp,
+  a dominant feature and a mixed-feature flag. A wide interval can overlap
+  several genes/features; gene association does not imply functional targeting.
+- Molecule counts and percentages per sample; exon-plus-intron gene-body totals.
+- Condition means of sample percentages, sample standard deviations and pooled
+  counts. Condition plots show equal-weight means and individual biological
+  sample points, avoiding dominance by deeply sequenced replicates. Empty
+  libraries have undefined percentages and are excluded from percentage means.
+- PNG/PDF feature-distribution plots, MultiQC plots for samples and conditions,
+  and GTF checksum, parameters and software-version provenance.
+
+Percentages describe the allocation of retained molecules. They are not
+enrichment scores or evidence of a treatment effect. A suitable enrichment
+background must account for genomic opportunity, blacklist exclusions and
+mappability; no such background or significance test is fitted here. Use a new
+output directory on resumed runs to preserve previous results.
+
+## Genomic-window PCA
+
+With `--run_windows`, the pipeline also generates exploratory per-sample PCA
+for every requested `--window_sizes` value. Use `--run_pca false` to disable it.
+For example:
+
+```bash
+nextflow run main.nf [your existing options] \
+  --run_windows --window_sizes 10000,50000,100000 -resume
+```
+
+Use a new `--outdir` to preserve previous reports. Results are published under
+`Analysis/PCA`: `windows_PCA.png`, `windows_PCA.pdf`, sample coordinates,
+selected regions/loadings, parameters and software versions. MultiQC includes
+a table of explained variance and correlations with original library depth.
+Matplotlib is declared in `environment.yml`; the existing activated environment
+must provide it when Nextflow-managed Conda is not used.
+
+PCA uses `log2(1 + CPM)`, with centered features and no variance scaling. A
+condition-independent filter requires at least five pooled molecules and
+nonzero counts in at least two samples; up to 2,000 windows are selected by
+variance. The second row repeats PCA after sampling molecules without
+replacement to the smallest library size (seed 1729), using the same features.
+This is a depth sensitivity check, not a stability analysis or differential
+test. Sample group, replicate and donor metadata are preserved; pairing is
+not inferred. Window sizes with fewer than three samples, empty libraries,
+insufficient features or no variance are reported as skipped.
+
+The analysis task remains at 1 CPU, with BLAS threads limited to one. Sparse
+counts and feature selection can retain depth-related patterns after CPM or
+equal-depth sampling. PCA separation does not establish a treatment effect
+or absolute DSB burden.
+
 ## Controlled aligner pilot
 
 Before changing the production aligner, compare BWA, Bowtie2 end-to-end and

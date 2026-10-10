@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).parents[1]
 STUBS = {
     'MACS3_CALLPEAK': 'touch ${meta.sample}_peaks.narrowPeak ${meta.sample}.provenance.json ${meta.sample}_peaks.xls ${meta.sample}_summits.bed ${meta.sample}.versions.json macs3.log',
-    'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p MergedReplicate/treated/peaks\n    touch MergedReplicate/treated/peaks/treated.consensus.bed',
+    'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p MergedReplicate/treated/peaks PCA\n    touch MergedReplicate/treated/peaks/treated.consensus.bed PCA/pca_mqc.json PCA/windows_PCA.pdf',
     "CHECK_ENVIRONMENT": "echo '{}' > environment.json\n    touch design.summary.json design.metadata.tsv design.metadata_mqc.json",
     "EXTRACT_UMI": "touch ${meta.sample}.umi.fastq.gz ${meta.sample}.preparation.json ${meta.sample}.preparation_mqc.json",
     "MAP_READS": """touch ${meta.sample}.q${params.mapq}.bam ${meta.sample}.q${params.mapq}.bam.bai
@@ -38,6 +38,8 @@ STUBS = {
 
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
+    def test_gtf_annotation_without_windows(self):
+        self.test_three_samples_two_conditions_and_integer_cpu_requests(['--gtf', 'genes.gtf', '--gtf_genome', 'hg38'])
     def test_windows_without_peak_calling(self):
         self.test_three_samples_two_conditions_and_integer_cpu_requests(['--run_windows'])
 
@@ -55,7 +57,10 @@ class TestNextflowReporting(unittest.TestCase):
             def add_stub(match):
                 name, block = match.groups()
                 script = block.index("    script:")
-                return f"process {name} {{" + block[:script] + '    stub:\n    """\n    ' + STUBS[name] + '\n    """\n\n' + block[script:]
+                stub = STUBS[name]
+                if name == 'ANALYZE_REGIONS':
+                    stub += '\n    mkdir -p Annotation\n    touch Annotation/annotation_samples_mqc.json Annotation/annotation_conditions_mqc.json Annotation/dsb_feature_distribution.pdf'
+                return f"process {name} {{" + block[:script] + '    stub:\n    """\n    ' + stub + '\n    """\n\n' + block[script:]
 
             (root / "main.nf").write_text(pattern.sub(add_stub, source))
             shutil.copytree(ROOT / "conf", root / "conf")
@@ -69,6 +74,7 @@ class TestNextflowReporting(unittest.TestCase):
                 "timeline.enabled = false\nreport.enabled = false\ntrace.enabled = false\ndag.enabled = false\n")
             (root / "input.fastq").write_text("@test\nACGT\n+\nIIII\n")
             (root / "reference.json").write_text("{}\n")
+            (root / 'genes.gtf').write_text('# annotation staging fixture\n')
             (root / "samples.tsv").write_text(
                 "sample\tgroup\treplicate\tbarcode\tfastq\n" + "".join(
                     f"{sample}\t{group}\t{replicate}\tACGT\t{root / 'input.fastq'}\n"
@@ -83,6 +89,9 @@ class TestNextflowReporting(unittest.TestCase):
             outputs = root / "outputs"
             if analysis_options:
                 self.assertTrue((outputs / 'Analysis' / 'windows_1000.counts.tsv').is_file())
+                self.assertTrue((outputs / 'Analysis' / 'PCA' / 'windows_PCA.pdf').is_file())
+                if '--gtf' in analysis_options:
+                    self.assertTrue((outputs / 'Analysis' / 'Annotation' / 'dsb_feature_distribution.pdf').is_file())
                 if '--run_peak_calling' in analysis_options:
                     for sample in ('a', 'b', 'c'):
                         self.assertTrue((outputs / 'SingleReplicate' / sample / 'peaks' / f'{sample}_peaks.narrowPeak').is_file())

@@ -21,6 +21,11 @@ params.dedup_method = 'directional'
 params.outdir = 'results'
 params.coverage_bin_size = 50
 params.run_windows = false
+params.run_pca = true
+params.gtf = null
+params.gtf_genome = null
+params.promoter_upstream = 2000
+params.promoter_downstream = 500
 params.run_peak_calling = false
 params.window_sizes = '1000,5000,10000'
 params.min_reps_consensus = 2
@@ -240,14 +245,21 @@ process ANALYZE_REGIONS {
     cpus 1
     publishDir "${params.outdir}", mode: 'copy', pattern: '{SingleReplicate,MergedReplicate}/**'
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: '*.{tsv,bed,json}'
+    publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'PCA'
+    publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'Annotation'
 
     input:
     tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*'), path(peak_files), path(peak_provenance)
     path design_files, arity: '1..*'
+    path annotation_gtf, stageAs: 'annotation_reference/*'
 
     output:
     path '*.{tsv,bed,json}', emit: tables
     path 'analysis_mqc.json', emit: multiqc
+    path 'PCA', optional: true, emit: pca
+    path 'PCA/pca_mqc.json', optional: true, emit: pca_multiqc
+    path 'Annotation', optional: true, emit: annotation
+    path 'Annotation/*_mqc.json', optional: true, emit: annotation_multiqc
     path 'SingleReplicate/*/peaks/*', optional: true
     path 'MergedReplicate/*/peaks/*', optional: true
 
@@ -259,6 +271,11 @@ process ANALYZE_REGIONS {
     def externalPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') +
         ' --peak-provenance ' + peak_provenance.collect { "'${it}'" }.join(' ') : ''
     def windows = params.run_windows.toString() == 'true' ? params.window_sizes : ''
+    def pcaCommand = windows && params.run_pca.toString() == 'true' ?
+        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/pca_windows.py --analysis-dir . --outdir PCA --windows ${windows.toString().split(',').join(' ')}" : ''
+    def annotationPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') : ''
+    def annotationCommand = annotation_gtf ?
+        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --analysis-dir . --outdir Annotation ${annotationPeaks}" : ''
     def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
     def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
     def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
@@ -269,6 +286,8 @@ process ANALYZE_REGIONS {
         --design-file design.summary.json --windows '${windows}' ${peaks} ${background} ${externalPeaks} \\
         --min-reps-consensus '${params.min_reps_consensus}' --peak-width '${params.peak_width}' \\
         --peak-qvalue '${params.peak_qvalue}' --effective-genome-size '${effectiveSize}'
+    ${pcaCommand}
+    ${annotationCommand}
     """
 }
 
@@ -307,6 +326,20 @@ workflow {
     if (!params.manifest || !params.genome || !params.reference_config) {
         error 'Provide --manifest, --genome and --reference_config (see docs/nextflow.md)'
     }
+    if (params.gtf) {
+        def aliases = [hg19: 'hg19', grch37: 'hg19', hg38: 'hg38', grch38: 'hg38', mm10: 'mm10', grcm38: 'mm10', mm39: 'mm39', grcm39: 'mm39']
+        if (!params.gtf_genome || !aliases[params.gtf_genome.toString().toLowerCase()] ||
+            aliases[params.gtf_genome.toString().toLowerCase()] != aliases[params.genome.toString().toLowerCase()]) {
+            error '--gtf requires --gtf_genome matching --genome'
+        }
+    } else if (params.gtf_genome) {
+        error '--gtf_genome requires --gtf'
+    }
+    if (!(params.promoter_upstream.toString() ==~ /0|[1-9][0-9]*/) ||
+        !(params.promoter_downstream.toString() ==~ /[1-9][0-9]*/)) {
+        error '--promoter_upstream must be nonnegative and --promoter_downstream positive'
+    }
+    annotation_reference = params.gtf ? file(params.gtf, checkIfExists: true) : []
     if (params.effective_genome_size.toString() == 'auto') {
         if (params.run_peak_calling.toString() == 'true' && !(params.genome in ['hg38', 'mm10'])) {
             error 'Provide --effective_genome_size for peak calling with this genome assembly'
@@ -314,7 +347,7 @@ workflow {
     } else if (!(params.effective_genome_size.toString() ==~ /[1-9][0-9]*/)) {
         error '--effective_genome_size must be auto or a positive integer'
     }
-    ['run_windows', 'run_peak_calling', 'peak_nolambda'].each { key ->
+    ['run_windows', 'run_pca', 'run_peak_calling', 'peak_nolambda'].each { key ->
         if (!(params[key].toString() in ['true', 'false'])) { error "--${key} must be true or false" }
     }
     if (!(params.window_sizes.toString() ==~ /[1-9][0-9]*(,[1-9][0-9]*)*/)) {
@@ -407,7 +440,7 @@ workflow {
         }
     conditions = CONDITION_QC(grouped)
     analysis_reports = Channel.empty()
-    if (params.run_windows.toString() == 'true' || params.run_peak_calling.toString() == 'true') {
+    if (params.run_windows.toString() == 'true' || params.run_peak_calling.toString() == 'true' || params.gtf) {
         region_inputs = qc.condition_input
             .map { meta, summary, header, counts, bam, bai -> tuple(meta, counts, header) }
             .join(dedup.molecules)
@@ -424,8 +457,8 @@ workflow {
                       ordered.collect { it.size() > 4 ? it[4] : null }.findAll { it != null },
                       ordered.collect { it.size() > 5 ? it[5] : null }.findAll { it != null })
             }
-        analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect())
-        analysis_reports = analysis.multiqc
+        analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect(), annotation_reference)
+        analysis_reports = analysis.multiqc.mix(analysis.pca_multiqc, analysis.annotation_multiqc).flatten()
     }
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),
             conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect(),
