@@ -114,6 +114,20 @@ first records of each file, not a random sample or a complete read count. See
 
 ## Preparation, mapping and molecule counting
 
+MACS3 threshold sensitivity can be run without remapping using
+`scripts/compare_peak_qvalues.py --source COMPLETED_OUTPUT --outdir NEW_OUTPUT
+--qvalues 0.05 0.10`. It reuses jointly deduplicated molecules and the source
+peak width, effective genome size and background setting. Each threshold has
+independent outputs and a consensus requiring at least two biological replicates
+within each condition. Do not pool discoveries across thresholds as one FDR set.
+Peak-enabled runs also write `Analysis/PeakOverlap` with a condition UpSet in
+PNG/PDF, genomic membership BED, intersection segment counts and covered bases.
+The standalone comparison places these in `q_*/PeakOverlap`. Partial overlaps
+are split into disjoint segments with exact condition membership; adjacent
+intervals do not overlap. Unique segments mean condition-specific detection,
+not statistically significant differential DSB signal. Empty sets are reported
+explicitly. A replicate consensus does not itself establish a consensus-level FDR.
+
 `EXTRACT_UMI` runs `scripts/prepare_bliss_reads.py` automatically. It requires
 an exact barcode immediately after the initial UMI, removes both, and retains
 the UMI in the read name. `--barcode_orientation forward` uses the manifest

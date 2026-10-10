@@ -260,6 +260,7 @@ process ANALYZE_REGIONS {
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: '*.{tsv,bed,json}'
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'PCA'
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'Annotation'
+    publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'PeakOverlap'
 
     input:
     tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*'), path(peak_files), path(peak_provenance)
@@ -273,6 +274,7 @@ process ANALYZE_REGIONS {
     path 'PCA', optional: true, emit: pca
     path 'PCA/pca_mqc.json', optional: true, emit: pca_multiqc
     path 'Annotation', optional: true, emit: annotation
+    path 'PeakOverlap', optional: true, emit: peak_overlap
     path 'Annotation/*_mqc.json', optional: true, emit: annotation_multiqc
     path 'SingleReplicate/*/peaks/*', optional: true
     path 'MergedReplicate/*/peaks/*', optional: true

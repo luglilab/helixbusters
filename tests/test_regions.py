@@ -9,9 +9,24 @@ import tempfile
 import unittest
 
 from helixbusters.regions import consensus_regions, load_sites, union_regions, window_regions, write_matrix
+from helixbusters.peak_overlap import write_peak_overlap
 
 
 class TestRegions(unittest.TestCase):
+    def test_condition_overlap_partial_touching_and_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = write_peak_overlap({'ACUTE': [('chr1', 0, 20), ('chr1', 40, 50)],
+                                         'CHRONIC': [('chr1', 10, 30), ('chr1', 50, 60)]}, root / 'overlap')
+            self.assertEqual(report['covered_bp'], 50)
+            with (root / 'overlap/intersections.tsv').open() as handle:
+                rows = {r['conditions']: r for r in csv.DictReader(handle, delimiter='\t')}
+            self.assertEqual(int(rows['ACUTE,CHRONIC']['covered_bp']), 10)
+            self.assertEqual(int(rows['ACUTE']['covered_bp']), 20)
+            self.assertEqual(int(rows['CHRONIC']['covered_bp']), 20)
+            empty = write_peak_overlap({'ACUTE': [], 'CHRONIC': []}, root / 'empty')
+            self.assertEqual(empty['segments'], 0)
+            self.assertTrue((root / 'empty/conditions_upset.pdf').is_file())
     def test_incompatible_references_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

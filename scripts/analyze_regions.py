@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helixbusters.regions import consensus_regions, load_sites, union_regions, window_regions, write_matrix
 from helixbusters.reporting import write_json
 from helixbusters.peaks import call_sample_peaks, read_peaks
+from helixbusters.peak_overlap import write_peak_overlap
 
 
 def main():
@@ -88,8 +89,10 @@ def main():
             report['samples'][sample]['macs3_version'] = provenance['version']
             versions.add(provenance['version'])
         common = []
+        condition_intervals = {}
         for group, samples in sorted(groups.items()):
             consensus = consensus_regions({sample: all_peaks[sample] for sample in samples}, args.min_reps_consensus)
+            condition_intervals[group] = [(chrom, start, end) for chrom, start, end, _ in consensus]
             folder = Path('MergedReplicate') / group / 'peaks'
             folder.mkdir(parents=True)
             with (folder / f'{group}.consensus.bed').open('x') as handle:
@@ -99,6 +102,7 @@ def main():
             report['conditions'][group] = {'replicates': len(samples), 'consensus_segments': len(consensus), 'minimum_replicates': args.min_reps_consensus}
         regions = union_regions(common, header)
         write_matrix('peaks_consensus', regions, args.samples, sites)
+        report['condition_overlap'] = write_peak_overlap(condition_intervals)
         version = next(iter(versions)) if len(versions) == 1 else sorted(versions)
         report['peak_parameters'] = {'width': args.peak_width, 'qvalue': args.peak_qvalue, 'effective_genome_size': args.effective_genome_size, 'nolambda': args.nolambda, 'background': 'global' if args.nolambda else 'local', 'macs3_version': version, 'common_regions': len(regions)}
     write_json('analysis.summary.json', report)
