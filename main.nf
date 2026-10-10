@@ -35,6 +35,8 @@ params.window_min_molecules = 5
 params.window_min_reps = 2
 params.run_peak_calling = false // Legacy false is accepted; true is rejected.
 params.run_differential = false
+params.differential_mode = 'contrast'
+params.timepoints = null
 params.contrast = null
 params.differential_min_count = 5
 params.differential_min_samples = 2
@@ -283,13 +285,17 @@ process DIFFERENTIAL_DSB {
     path 'Differential/differential_mqc.json', emit: multiqc
 
     script:
-    def contrastArgs = params.contrast.toString().split(',').collect { "'${it}'" }.join(' ')
+    def timecourse = params.differential_mode == 'timecourse'
+    def contrastArgs = (timecourse ? params.timepoints : params.contrast).toString().split(',').collect { "'${it}'" }.join(' ')
+    def differentialScript = timecourse ? 'timecourse_dsb.py' : 'differential_dsb.py'
+    def modelArgs = timecourse ? "--timepoints ${contrastArgs}" : "--design '${params.design}' --contrast ${contrastArgs}"
+    def robustnessArgs = timecourse ? '' : "--iterations '${params.robustness_iterations}' --seed '${params.robustness_seed}'"
     """
     env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \\
-        python ${projectDir}/scripts/differential_dsb.py \\
-        --analysis-dir . --outdir Differential --design '${params.design}' --contrast ${contrastArgs} \\
+        python ${projectDir}/scripts/${differentialScript} \\
+        --analysis-dir . --outdir Differential ${modelArgs} \\
         --minimum-count '${params.differential_min_count}' --minimum-samples '${params.differential_min_samples}' \\
-        --fdr '${params.differential_fdr}' --iterations '${params.robustness_iterations}' --seed '${params.robustness_seed}'
+        --fdr '${params.differential_fdr}' ${robustnessArgs}
     """
 }
 
@@ -376,13 +382,23 @@ workflow {
     if (!(params.design in ['paired', 'unpaired', 'unspecified'])) {
         error '--design must be paired, unpaired or unspecified'
     }
+    if (!(params.differential_mode in ['contrast', 'timecourse'])) { error '--differential_mode must be contrast or timecourse' }
     if (params.run_differential.toString() == 'true') {
         if (params.design == 'unspecified') { error '--run_differential requires --design paired or unpaired' }
-        if (!(params.contrast ==~ /[A-Za-z0-9][A-Za-z0-9_.-]*,[A-Za-z0-9][A-Za-z0-9_.-]*/)) {
-            error '--contrast must be NUMERATOR,DENOMINATOR with two explicit condition labels'
+        if (params.differential_mode == 'timecourse') {
+            if (params.design != 'paired' || params.contrast) { error 'Time course requires --design paired and no --contrast' }
+            if (!(params.timepoints ==~ /[A-Za-z0-9][A-Za-z0-9_.-]*(,[A-Za-z0-9][A-Za-z0-9_.-]*){2,}/)) {
+                error '--timepoints requires >=3 comma-separated labels, baseline first'
+            }
+            def times = params.timepoints.toString().split(',')
+            if (times.toList().toSet().size() != times.size()) { error '--timepoints contains duplicates' }
+        } else {
+            if (!(params.contrast ==~ /[A-Za-z0-9][A-Za-z0-9_.-]*,[A-Za-z0-9][A-Za-z0-9_.-]*/)) {
+                error '--contrast must be NUMERATOR,DENOMINATOR with two explicit condition labels'
+            }
+            def contrastLabels = params.contrast.toString().split(',')
+            if (contrastLabels[0] == contrastLabels[1]) { error 'Contrast conditions must differ' }
         }
-        def contrastLabels = params.contrast.toString().split(',')
-        if (contrastLabels[0] == contrastLabels[1]) { error 'Contrast conditions must differ' }
         if (params.run_windows.toString() != 'true' && !params.gtf) { error '--run_differential requires --run_windows or --gtf' }
     }
     ['differential_min_count', 'differential_min_samples', 'robustness_iterations'].each { key ->
@@ -424,7 +440,10 @@ workflow {
         .flatMap { rows ->
             if (!rows) { error 'Manifest contains no samples' }
             if (params.run_differential.toString() == 'true') {
-                def contrasts = params.contrast.toString().split(',')
+                def contrasts = (params.differential_mode == 'timecourse' ? params.timepoints : params.contrast).toString().split(',')
+                if (params.differential_mode == 'timecourse' && rows.collect { it.group }.toSet() != contrasts.toList().toSet()) {
+                    error '--timepoints must match all manifest conditions exactly'
+                }
                 if (contrasts.any { group -> rows.count { it.group == group } < 3 }) {
                     error '--run_differential requires >=3 biological samples per contrast condition'
                 }

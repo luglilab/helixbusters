@@ -38,6 +38,10 @@ STUBS = {
 
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
+    def test_timecourse_wiring(self):
+        self.test_three_samples_two_conditions_and_integer_cpu_requests(
+            ['--run_windows', '--run_differential', '--design', 'paired',
+             '--differential_mode', 'timecourse', '--timepoints', 'control,treated,late'])
     def test_differential_wiring_with_and_without_annotation(self):
         for options in (['--run_windows'], ['--gtf', 'genes.gtf', '--gtf_genome', 'hg38']):
             with self.subTest(options=options):
@@ -89,6 +93,8 @@ class TestNextflowReporting(unittest.TestCase):
             members = [("a", "treated", "1"), ("b", "treated", "2"), ("c", "control", "1"), ("d", "control", "2")]
             if '--run_differential' in analysis_options:
                 members += [("e", "treated", "3"), ("f", "control", "3")]
+            if '--timepoints' in analysis_options:
+                members += [('g', 'late', '1'), ('h', 'late', '2'), ('i', 'late', '3')]
             (root / "samples.tsv").write_text(
                 "sample\tgroup\treplicate\tdonor\tbarcode\tfastq\n" + "".join(
                     f"{sample}\t{group}\t{replicate}\tD{replicate}\tACGT\t{root / 'input.fastq'}\n"
@@ -115,12 +121,12 @@ class TestNextflowReporting(unittest.TestCase):
             for sample, _, _ in members:
                 self.assertEqual((outputs / "SingleReplicate" / sample / "mapping" / f"{sample}.cpu.log").read_text().strip(), "11")
                 self.assertTrue((outputs / "SingleReplicate" / sample / "bigwig" / f"{sample}.ends.CPM.bw").is_file())
-            for group in ('treated', 'control'):
+            for group in sorted({m[1] for m in members}):
                 n = sum(member[1] == group for member in members)
                 self.assertEqual((outputs / "MergedReplicate" / group / "qc" / f"{group}.condition.qc.tsv").read_text().strip(), str(n))
                 self.assertTrue((outputs / "MergedReplicate" / group / "mapping" / f"{group}.condition.filtered.bam").is_file())
             self.assertEqual((outputs / "MultiQC" / "helixbusters_samples.tsv").read_text().strip(), str(len(members)))
-            self.assertEqual((outputs / "MultiQC" / "helixbusters_conditions.tsv").read_text().strip(), "2")
+            self.assertEqual((outputs / "MultiQC" / "helixbusters_conditions.tsv").read_text().strip(), str(len({m[1] for m in members})))
 
 
 if __name__ == "__main__":

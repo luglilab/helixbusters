@@ -693,3 +693,36 @@ deduplication, reporting and lightweight Nextflow wiring. Integration tests
 require their external tools and skip when unavailable. Local Nextflow checks
 have used 24.10.3; HPC compatibility has also been exercised during runs with
 26.04.6. A successful run validates execution, not biological specificity.
+# Paired time-course analysis
+
+For experiments such as EXP4 (the same three donors at Baseline, T2H, T6H and
+T24H), enable `--run_differential true --design paired --differential_mode
+timecourse --timepoints Baseline,T2H,T6H,T24H`. Do not also specify `--contrast`.
+The default `differential_mode=contrast` preserves existing single-contrast runs.
+
+The time-course mode fits all libraries together with categorical time and donor
+(`~ donor + condition`). It requires complete pairing, at least three donors and
+at least three distinct time points; the first supplied time point is the
+baseline. A global likelihood-ratio test compares the full model with `~ donor`.
+Wald contrasts compare each subsequent time with baseline using the same fitted
+normalization and dispersions. Global results have no single log2 fold change.
+
+Results are published in `Analysis/Differential/<feature_family>/`:
+`poscounts.global.tsv`, `poscounts.T2H_vs_Baseline.tsv`, analogous tables for the
+other times, and `library_total.*.tsv` normalization sensitivity. Contrast tables
+include log2 fold change, standard error, raw counts and descriptive donor CPM
+ratios. `padj` applies joint BH across all features and baseline contrasts within
+that family; `padj_within_contrast` is provided separately. Global LRT correction
+is a separate within-family BH family. There is no joint FDR across window sizes
+or promoter/gene-body contexts, and Wald tests are not selected by LRT results.
+`timecourse.summary.json`, size factors, model logs and R session information
+record the analysis. MultiQC includes a time-course summary table.
+
+These are relative signal comparisons, not calibrated DSB per cell. Without
+time-matched unstimulated controls, stimulation and culture-time effects cannot
+be separated. Supported-window UpSet and PCA remain descriptive; a region's
+presence in an UpSet intersection is not evidence of differential enrichment.
+The time-course mode provides descriptive donor influence; equal-depth support
+remains available in WindowOverlap, rather than being refitted as a temporal
+significance test. Disable differential analysis for functional small-subset
+tests and one-donor input titrations.
