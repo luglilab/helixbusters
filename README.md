@@ -255,6 +255,31 @@ MACS3 q-values describe enrichment under its background model, not differences
 between conditions. Low retained molecule counts and residual technical
 artifacts must be considered before interpreting hotspots biologically.
 
+## Clipping and molecular-depth diagnostics
+
+For read-only investigation of residual clipping and usable molecular depth,
+run `scripts/audit_bliss_recovery.py --single-replicate-dir /path/to/SingleReplicate
+--outdir /path/to/new/audit`. It scans each filtered BAM once and uniformly samples
+up to 50,000 primary mapped reads (seed 1729). The output compares clipped and
+strict-accepted reads for clipping lengths, base quality and exact technical-motif
+segments. Family-table counts must conserve accepted reads and deduplicated
+molecules. Observed-family thinning curves do not extrapolate library complexity
+or re-infer directional UMI clusters.
+
+`scripts/pilot_clipped_prefix.py` is a separate **experimental pilot**, not a
+production preprocessing option. It remaps the same filtered-BAM cohort with
+and without a narrowly defined correction: only biological 5-prime soft clips
+of 12–17 bases exactly matching the prefix of `CCCTATAGTGAGTCGTAT`, clip mean
+quality >=30, next five bases >=Q20, and remaining insert >=40 bases. It restores
+sequencing orientation and preserves authoritative UMIs. Other reads are
+unchanged; both branches retain MAPQ/blacklist filtering and strict endpoints.
+Supply `--single-replicate-dir`, `--samples`, `--reference-config` and a new
+`--outdir`. The JSON and metrics report molecule yield, unchanged-control
+concordance and candidate endpoint shifts. Source aligned boundaries are not
+independently validated DSB coordinates; a yield increase alone does not authorize
+adopting this correction. The cohort is conditional on original filtered mapping,
+so its yield cannot be interpreted as a whole-library gain.
+
 ## Differential relative DSB signal and robustness
 
 Enable an explicit contrast using `--run_differential --design paired
