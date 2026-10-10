@@ -13,6 +13,7 @@ params.barcode_orientation = 'forward'
 params.minimum_insert_length = 20
 params.technical_prefix = ''
 params.technical_prefix_max_errors = 0
+params.exact20_rescue = false
 params.mapq = 20
 params.map_threads = 8
 params.sort_threads = 1
@@ -93,7 +94,7 @@ process EXTRACT_UMI {
         --barcode-orientation '${params.barcode_orientation}' --umi-length '${params.umi_length}' \\
         --minimum-insert-length '${params.minimum_insert_length}' \\
         --technical-prefix '${params.technical_prefix}' \\
-        --technical-prefix-max-errors '${params.technical_prefix_max_errors}' --outdir .
+        --technical-prefix-max-errors '${params.technical_prefix_max_errors}' ${params.exact20_rescue.toString() == 'true' ? '--exact20-rescue' : ''} --outdir .
     """
 }
 
@@ -448,6 +449,12 @@ workflow {
     }
     if (params.technical_prefix && !(params.technical_prefix ==~ /[ACGT]{12,}/)) {
         error '--technical_prefix must contain at least 12 A/C/G/T bases'
+    }
+    if (!(params.exact20_rescue.toString() in ['true', 'false'])) {
+        error '--exact20_rescue must be true or false'
+    }
+    if (params.exact20_rescue.toString() == 'true' && params.technical_prefix != 'CCCTATAGTGAGTCGTAT') {
+        error '--exact20_rescue requires --technical_prefix CCCTATAGTGAGTCGTAT'
     }
     if (!(params.technical_prefix_max_errors.toString() in ['0', '1', '2']) ||
         (params.technical_prefix_max_errors.toString() != '0' && !params.technical_prefix)) {

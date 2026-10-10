@@ -40,6 +40,17 @@ class TestFullPrefixRescue(unittest.TestCase):
                 self.assertEqual(a.read(), b.read())
             with gzip.open(candidate / 'candidate_trim.fastq.gz', 'rt') as handle:
                 text = handle.read(); self.assertIn('@rescue_CCCCCCCC comment\n' + dna, text)
+            integrated = root / 'integrated'
+            integrated_counts = prepare(source, 'toy', barcode, 'reverse_complement', 8, 20,
+                                        T7_REVERSE[:18], integrated, 2, exact20_rescue=True)
+            with gzip.open(integrated / 'toy.umi.fastq.gz', 'rt') as handle:
+                self.assertEqual(handle.read(), text)
+            self.assertEqual(integrated_counts['output_reads'], 2)
+            self.assertEqual(sum(v for k, v in integrated_counts.items() if k != 'input_reads'),
+                             integrated_counts['input_reads'])
+            qc = json.loads((integrated / 'toy.preparation.json').read_text())
+            self.assertEqual(qc['exact20_rescued_reads'], 1)
+            self.assertEqual(qc['rescue_exclusions']['residual_T7_in_either_orientation'], 1)
 
     @unittest.skipUnless(all(shutil.which(x) for x in ('bwa', 'samtools')), 'Mapping tools unavailable')
     def test_joint_deduplication_does_not_add_same_umi_molecule_twice(self):

@@ -8,10 +8,12 @@ import json
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from helixbusters.technical import prefix_distance
+from helixbusters.technical import prefix_distance, full_t7_rescue_reason, T7_REVERSE
 
 
-def prepare(reads, sample, barcode, orientation, umi_length, min_length, technical_prefix, outdir, technical_prefix_max_errors=0):
+def prepare(reads, sample, barcode, orientation, umi_length, min_length, technical_prefix, outdir, technical_prefix_max_errors=0, exact20_rescue=False):
+    if exact20_rescue and technical_prefix != T7_REVERSE[:18]:
+        raise ValueError('Exact20 rescue requires technical prefix CCCTATAGTGAGTCGTAT')
     if not barcode or set(barcode) - set('ACGT'):
         raise ValueError('Barcode must contain only A/C/G/T')
     if umi_length < 1 or min_length < 1:
@@ -34,6 +36,8 @@ def prepare(reads, sample, barcode, orientation, umi_length, min_length, technic
                                        'technical_prefix_reads', 'short_insert_reads', 'output_reads')})
     opener = gzip.open if str(reads).lower().endswith('.gz') else open
     end = umi_length + len(barcode)
+    rescued_reads = 0
+    rescue_exclusions = Counter()
     with opener(reads, 'rt', encoding='ascii') as source, fastq.open('xb') as raw:
         # Fixed gzip timestamp makes the compressed output reproducible.
         with gzip.GzipFile(fileobj=raw, mode='wb', filename='', mtime=0) as destination:
@@ -57,15 +61,23 @@ def prepare(reads, sample, barcode, orientation, umi_length, min_length, technic
                     counts['invalid_umi_reads'] += 1
                     continue
                 insert = sequence[end:]
+                insert_quality = quality[end:]
                 if technical_prefix and prefix_distance(insert, technical_prefix, technical_prefix_max_errors) <= technical_prefix_max_errors:
-                    counts['technical_prefix_reads'] += 1
-                    continue
+                    reason = full_t7_rescue_reason(insert, insert_quality) if exact20_rescue else 'disabled'
+                    if reason is None:
+                        insert, insert_quality = insert[20:], insert_quality[20:]
+                        rescued_reads += 1
+                    else:
+                        counts['technical_prefix_reads'] += 1
+                        if exact20_rescue:
+                            rescue_exclusions[reason] += 1
+                        continue
                 if len(insert) < min_length:
                     counts['short_insert_reads'] += 1
                     continue
                 identifier, *description = header.split(maxsplit=1)
                 new_header = identifier + '_' + umi + (' ' + description[0] if description else '')
-                destination.write(f'{new_header}\n{insert}\n+\n{quality[end:]}\n'.encode('ascii'))
+                destination.write(f'{new_header}\n{insert}\n+\n{insert_quality}\n'.encode('ascii'))
                 counts['output_reads'] += 1
     parameters = {'barcode': barcode, 'observed_barcode': observed_barcode,
                   'barcode_orientation': orientation, 'umi_length': umi_length,
@@ -74,13 +86,20 @@ def prepare(reads, sample, barcode, orientation, umi_length, min_length, technic
                   'barcode_match': 'exact, anchored immediately after UMI; no mismatch rescue',
                   'technical_filter': 'exclude entire read by anchored motif edit distance; substitutions/insertions/deletions; no fixed trimming'}
     data = dict(counts)
+    if exact20_rescue:
+        parameters['exact20_rescue'] = True
+        parameters['rescue_rule'] = 'exact20; tail >=40 bases; first five bases Q>=20 and no N; neither T7 orientation first12 in tail first60'
+        parameters['technical_filter'] = 'exclude matching reads unless eligible for exact20 rescue; trim 20 bases from eligible reads'
+        data['exact20_rescued_reads'] = rescued_reads
+        data['rescue_exclusions'] = dict(rescue_exclusions)
     data['preparation_retained_pct'] = 100 * counts['output_reads'] / counts['input_reads'] if counts['input_reads'] else None
-    qc.write_text(json.dumps({'sample': sample, 'counts': dict(counts), 'parameters': parameters}, indent=2) + '\n')
+    qc.write_text(json.dumps({'sample': sample, 'counts': dict(counts), 'parameters': parameters,
+                              **({'exact20_rescued_reads': rescued_reads, 'rescue_exclusions': dict(rescue_exclusions)} if exact20_rescue else {})}, indent=2) + '\n')
     custom.write_text(json.dumps({
         'id': 'helixbusters_preparation', 'section_name': 'Helixbusters read preparation',
-        'description': f'Counts start from original FASTQ records. Exclusions are exclusive: barcode, UMI, anchored technical prefix (up to {technical_prefix_max_errors} edits), insert length. The technical-prefix category does not establish adapter-dimer identity.',
+        'description': f'Counts start from original FASTQ records. Exclusions are exclusive: barcode, UMI, anchored technical prefix (up to {technical_prefix_max_errors} edits), insert length. The technical-prefix category does not establish adapter-dimer identity.' + (' Exact20 rescued reads are included in output reads; do not add them to the exclusive counts.' if exact20_rescue else ''),
         'plot_type': 'table', 'pconfig': {'id': 'helixbusters_preparation_table', 'title': 'Original reads and BLISS preparation'},
-        'data': {sample: {k: v for k, v in data.items() if v is not None}},
+        'data': {sample: {k: v for k, v in data.items() if isinstance(v, (int, float))}},
     }, indent=2) + '\n')
     print(json.dumps({'sample': sample, **data, 'parameters': parameters}, indent=2))
     if not counts['output_reads']:
@@ -98,12 +117,13 @@ def main():
     parser.add_argument('--minimum-insert-length', type=int, default=20)
     parser.add_argument('--technical-prefix', default='')
     parser.add_argument('--technical-prefix-max-errors', type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument('--exact20-rescue', action='store_true', help='Opt-in experimentally tested exact20 preparation; confirm assay adapter junction first')
     parser.add_argument('--outdir', default='.')
     args = parser.parse_args()
     if not args.sample or any(c in args.sample for c in '/\\\t\r\n') or args.sample in {'.', '..'}:
         parser.error('Invalid sample identifier')
     prepare(args.reads, args.sample, args.barcode.upper(), args.barcode_orientation, args.umi_length,
-            args.minimum_insert_length, args.technical_prefix.upper(), args.outdir, args.technical_prefix_max_errors)
+            args.minimum_insert_length, args.technical_prefix.upper(), args.outdir, args.technical_prefix_max_errors, args.exact20_rescue)
 
 
 if __name__ == '__main__':

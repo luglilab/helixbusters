@@ -135,6 +135,28 @@ internal motif occurrences. Confirm the motif and compare molecule yield in a
 pilot before applying it to a new dataset.
 
 Preparation reports count original FASTQ reads and exclusive exclusion reasons.
+The experimentally evaluated EXP1 exact20 recovery is available as an explicit
+opt-in with `--exact20_rescue true`, together with the 18-base technical prefix
+above. It trims only the exact `CCCTATAGTGAGTCGTATTA` prefix from reads otherwise
+excluded by the technical filter. The remaining insert must have at least 40
+bases, its first five bases must contain no N and have Phred quality >=20, and
+neither orientation of the T7 first 12 bases may occur in its first 60 bases.
+Original and rescued reads enter the same mapping and UMI deduplication process.
+Preparation QC reports rescued reads separately; these are a subset of output
+reads, not an additional exclusive category. The default is false. Verify the
+actual assay's adapter/genomic junction before adopting this recovery as the
+production default; the modified no-IVT protocol diagram alone does not establish
+its nucleotide sequence. Keep a run without recovery for sensitivity comparisons.
+
+For paired EXP1, use BWA and an explicit donor-paired design. Prefer 50 kb windows
+for the main regional analysis, 100 kb for sensitivity and 10 kb for exploration.
+Interpret MACS3 consensus peaks as exploratory. Report gene-body and promoter
+counts separately, with effective length and per-kb density alongside raw burden.
+Density rankings are descriptive; differential testing uses integer counts and
+the paired model. Report effect sizes, uncertainty and FDR, and flag candidates
+whose effects depend strongly on preparation. Library normalization does not
+estimate absolute DSBs per cell without calibration.
+
 The workflow stops if a sample retains no reads. Mapping applies the
 selected build's canonical nuclear chromosome set, removes mitochondrial and
 blacklist-overlapping reads, and excludes low/unknown MAPQ and nonprimary
