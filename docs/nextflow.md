@@ -417,7 +417,17 @@ for sparse integer molecule matrices, and/or `--run_peak_calling
 --min_reps_consensus 2` for per-sample MACS3 hotspots and condition consensus.
 MACS3 must be available on workers only when peak calling is enabled.
 See README downstream analysis for smoothing, effective genome size, output
-locations and statistical limits. These steps do not fit a differential model.
+locations and statistical limits. These discovery steps do not fit a
+differential model. To enable a separate relative DSB comparison, add
+`--run_differential --design paired --contrast CHRONIC,ACUTE`, with explicit
+`donor` metadata in the manifest and at least three biological samples per
+contrast condition. Use `--design unpaired` for independent samples. This
+optional task requires R/DESeq2 in the active worker environment; additions
+are listed in `environment.differential.yml`. Results and robustness
+diagnostics are published in `Analysis/Differential`, with a MultiQC summary.
+The README documents normalization assumptions and within-family FDR.
+For preserved outputs with previously unspecified pairing, use
+`scripts/differential_dsb.py` and confirmed metadata without remapping.
 
 Peak calling now uses one `MACS3_CALLPEAK` task per sample, followed by the
 consensus/counting reporting task. Inputs remain independently deduplicated

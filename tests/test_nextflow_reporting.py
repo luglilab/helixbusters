@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).parents[1]
 STUBS = {
+    'DIFFERENTIAL_DSB': 'mkdir Differential\n    touch Differential/differential_mqc.json Differential/differential.summary.json',
     'MACS3_CALLPEAK': 'touch ${meta.sample}_peaks.narrowPeak ${meta.sample}.provenance.json ${meta.sample}_peaks.xls ${meta.sample}_summits.bed ${meta.sample}.versions.json macs3.log',
     'ANALYZE_REGIONS': 'touch analysis.summary.json analysis_mqc.json windows_1000.counts.tsv\n    mkdir -p MergedReplicate/treated/peaks PCA\n    touch MergedReplicate/treated/peaks/treated.consensus.bed PCA/pca_mqc.json PCA/windows_PCA.pdf',
     "CHECK_ENVIRONMENT": "echo '{}' > environment.json\n    touch design.summary.json design.metadata.tsv design.metadata_mqc.json",
@@ -38,6 +39,11 @@ STUBS = {
 
 @unittest.skipUnless(shutil.which("nextflow"), "Nextflow is not on PATH")
 class TestNextflowReporting(unittest.TestCase):
+    def test_differential_wiring_with_and_without_annotation(self):
+        for options in (['--run_windows'], ['--gtf', 'genes.gtf', '--gtf_genome', 'hg38']):
+            with self.subTest(options=options):
+                self.test_three_samples_two_conditions_and_integer_cpu_requests(
+                    [*options, '--run_differential', '--design', 'paired', '--contrast', 'treated,control'])
     def test_gtf_annotation_without_windows(self):
         self.test_three_samples_two_conditions_and_integer_cpu_requests(['--gtf', 'genes.gtf', '--gtf_genome', 'hg38'])
     def test_windows_without_peak_calling(self):
@@ -59,7 +65,11 @@ class TestNextflowReporting(unittest.TestCase):
                 script = block.index("    script:")
                 stub = STUBS[name]
                 if name == 'ANALYZE_REGIONS':
-                    stub += '\n    mkdir -p Annotation\n    touch Annotation/annotation_samples_mqc.json Annotation/annotation_conditions_mqc.json Annotation/dsb_feature_distribution.pdf'
+                    stub += '''
+    if [ -n "${params.gtf ?: ''}" ]; then
+        mkdir -p Annotation
+        touch Annotation/annotation_samples_mqc.json Annotation/annotation_conditions_mqc.json Annotation/dsb_feature_distribution.pdf
+    fi'''
                 return f"process {name} {{" + block[:script] + '    stub:\n    """\n    ' + stub + '\n    """\n\n' + block[script:]
 
             (root / "main.nf").write_text(pattern.sub(add_stub, source))
@@ -75,10 +85,13 @@ class TestNextflowReporting(unittest.TestCase):
             (root / "input.fastq").write_text("@test\nACGT\n+\nIIII\n")
             (root / "reference.json").write_text("{}\n")
             (root / 'genes.gtf').write_text('# annotation staging fixture\n')
+            members = [("a", "treated", "1"), ("b", "treated", "2"), ("c", "control", "1")]
+            if '--run_differential' in analysis_options:
+                members += [("d", "control", "2"), ("e", "treated", "3"), ("f", "control", "3")]
             (root / "samples.tsv").write_text(
-                "sample\tgroup\treplicate\tbarcode\tfastq\n" + "".join(
-                    f"{sample}\t{group}\t{replicate}\tACGT\t{root / 'input.fastq'}\n"
-                    for sample, group, replicate in (("a", "treated", "1"), ("b", "treated", "2"), ("c", "control", "1"))))
+                "sample\tgroup\treplicate\tdonor\tbarcode\tfastq\n" + "".join(
+                    f"{sample}\t{group}\t{replicate}\tD{replicate}\tACGT\t{root / 'input.fastq'}\n"
+                    for sample, group, replicate in members))
             result = subprocess.run([
                 "nextflow", "run", "main.nf", "-stub-run", "-profile", "local", "-c", "stub.config",
                 "--manifest", "samples.tsv", "--genome", "hg38", "--reference_config", "reference.json",
@@ -87,23 +100,28 @@ class TestNextflowReporting(unittest.TestCase):
                 capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             outputs = root / "outputs"
+            if '--run_differential' in analysis_options:
+                self.assertTrue((outputs / 'Analysis/Differential/differential.summary.json').is_file())
             if analysis_options:
                 self.assertTrue((outputs / 'Analysis' / 'windows_1000.counts.tsv').is_file())
                 self.assertTrue((outputs / 'Analysis' / 'PCA' / 'windows_PCA.pdf').is_file())
                 if '--gtf' in analysis_options:
                     self.assertTrue((outputs / 'Analysis' / 'Annotation' / 'dsb_feature_distribution.pdf').is_file())
+                else:
+                    self.assertFalse((outputs / 'Analysis' / 'Annotation').exists())
                 if '--run_peak_calling' in analysis_options:
                     for sample in ('a', 'b', 'c'):
                         self.assertTrue((outputs / 'SingleReplicate' / sample / 'peaks' / f'{sample}_peaks.narrowPeak').is_file())
                 else:
                     self.assertFalse((outputs / 'SingleReplicate' / 'a' / 'peaks').exists())
-            for sample in ("a", "b", "c"):
+            for sample, _, _ in members:
                 self.assertEqual((outputs / "SingleReplicate" / sample / "mapping" / f"{sample}.cpu.log").read_text().strip(), "11")
                 self.assertTrue((outputs / "SingleReplicate" / sample / "bigwig" / f"{sample}.ends.CPM.bw").is_file())
-            for group, n in (("treated", 2), ("control", 1)):
+            for group in ('treated', 'control'):
+                n = sum(member[1] == group for member in members)
                 self.assertEqual((outputs / "MergedReplicate" / group / "qc" / f"{group}.condition.qc.tsv").read_text().strip(), str(n))
                 self.assertTrue((outputs / "MergedReplicate" / group / "mapping" / f"{group}.condition.filtered.bam").is_file())
-            self.assertEqual((outputs / "MultiQC" / "helixbusters_samples.tsv").read_text().strip(), "3")
+            self.assertEqual((outputs / "MultiQC" / "helixbusters_samples.tsv").read_text().strip(), str(len(members)))
             self.assertEqual((outputs / "MultiQC" / "helixbusters_conditions.tsv").read_text().strip(), "2")
 
 

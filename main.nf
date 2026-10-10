@@ -35,6 +35,13 @@ params.peak_width = 100
 params.peak_qvalue = 0.01
 params.peak_nolambda = false
 params.effective_genome_size = 'auto'
+params.run_differential = false
+params.contrast = null
+params.differential_min_count = 5
+params.differential_min_samples = 2
+params.differential_fdr = 0.05
+params.robustness_iterations = 50
+params.robustness_seed = 1729
 
 process CHECK_ENVIRONMENT {
     label 'small'
@@ -52,7 +59,10 @@ process CHECK_ENVIRONMENT {
     path 'design.*', emit: design_metadata
 
     script:
+    def differentialCheck = params.run_differential.toString() == 'true' ?
+        "Rscript --vanilla -e 'if (!requireNamespace(\"DESeq2\", quietly=TRUE)) stop(\"DESeq2 is required for --run_differential\")'" : ''
     """
+    ${differentialCheck}
     python ${projectDir}/scripts/validate_experimental_design.py \\
         --manifest '${manifest_file}' --design '${params.design}'
     python ${projectDir}/scripts/post_mapping.py check \\
@@ -295,6 +305,30 @@ process ANALYZE_REGIONS {
     """
 }
 
+process DIFFERENTIAL_DSB {
+    label 'reporting'
+    cpus 1
+    publishDir "${params.outdir}/Analysis", mode: 'copy'
+
+    input:
+    path region_tables, arity: '1..*'
+    path annotation_files
+
+    output:
+    path 'Differential', emit: results
+    path 'Differential/differential_mqc.json', emit: multiqc
+
+    script:
+    def contrastArgs = params.contrast.toString().split(',').collect { "'${it}'" }.join(' ')
+    """
+    env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \\
+        python ${projectDir}/scripts/differential_dsb.py \\
+        --analysis-dir . --outdir Differential --design '${params.design}' --contrast ${contrastArgs} \\
+        --minimum-count '${params.differential_min_count}' --minimum-samples '${params.differential_min_samples}' \\
+        --fdr '${params.differential_fdr}' --iterations '${params.robustness_iterations}' --seed '${params.robustness_seed}'
+    """
+}
+
 process MULTIQC {
     label 'reporting'
     cpus 1
@@ -356,7 +390,7 @@ workflow {
     } else if (!(params.effective_genome_size.toString() ==~ /[1-9][0-9]*/)) {
         error '--effective_genome_size must be auto or a positive integer'
     }
-    ['run_windows', 'run_pca', 'run_peak_calling', 'peak_nolambda'].each { key ->
+    ['run_windows', 'run_pca', 'run_peak_calling', 'peak_nolambda', 'run_differential'].each { key ->
         if (!(params[key].toString() in ['true', 'false'])) { error "--${key} must be true or false" }
     }
     if (!(params.window_sizes.toString() ==~ /[1-9][0-9]*(,[1-9][0-9]*)*/)) {
@@ -386,6 +420,28 @@ workflow {
     if (!(params.design in ['paired', 'unpaired', 'unspecified'])) {
         error '--design must be paired, unpaired or unspecified'
     }
+    if (params.run_differential.toString() == 'true') {
+        if (params.design == 'unspecified') { error '--run_differential requires --design paired or unpaired' }
+        if (!(params.contrast ==~ /[A-Za-z0-9][A-Za-z0-9_.-]*,[A-Za-z0-9][A-Za-z0-9_.-]*/)) {
+            error '--contrast must be NUMERATOR,DENOMINATOR with two explicit condition labels'
+        }
+        def contrastLabels = params.contrast.toString().split(',')
+        if (contrastLabels[0] == contrastLabels[1]) { error 'Contrast conditions must differ' }
+        if (params.run_windows.toString() != 'true' && !params.gtf) { error '--run_differential requires --run_windows or --gtf' }
+    }
+    ['differential_min_count', 'differential_min_samples', 'robustness_iterations'].each { key ->
+        if (!(params[key].toString() ==~ /[1-9][0-9]*/) || params[key].toLong() > Integer.MAX_VALUE) {
+            error "--${key} must be a positive integer"
+        }
+    }
+    if ((params.differential_min_samples as Integer) < 2 || (params.robustness_iterations as Integer) < 2) {
+        error '--differential_min_samples and --robustness_iterations must be >=2'
+    }
+    if (!(params.robustness_seed.toString() ==~ /0|[1-9][0-9]*/)) { error '--robustness_seed must be nonnegative' }
+    if (!(params.differential_fdr.toString() ==~ /[0-9.eE+-]+/) ||
+        (params.differential_fdr as Double) <= 0 || (params.differential_fdr as Double) >= 1) {
+        error '--differential_fdr must be between 0 and 1'
+    }
     if (!(params.dedup_method in ['exact', 'directional'])) { error '--dedup_method must be exact or directional' }
     if (!(params.barcode_orientation in ['forward', 'reverse_complement'])) {
         error '--barcode_orientation must be forward or reverse_complement'
@@ -405,6 +461,12 @@ workflow {
         .collect()
         .flatMap { rows ->
             if (!rows) { error 'Manifest contains no samples' }
+            if (params.run_differential.toString() == 'true') {
+                def contrasts = params.contrast.toString().split(',')
+                if (contrasts.any { group -> rows.count { it.group == group } < 3 }) {
+                    error '--run_differential requires >=3 biological samples per contrast condition'
+                }
+            }
             if (params.run_peak_calling.toString() == 'true' &&
                 rows.groupBy { it.group }.any { group, members -> members.size() < (params.min_reps_consensus as Integer) }) {
                 error '--min_reps_consensus exceeds the biological replicate count of a condition'
@@ -468,6 +530,10 @@ workflow {
             }
         analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect(), annotation_reference, environment.ready)
         analysis_reports = analysis.multiqc.mix(analysis.pca_multiqc, analysis.annotation_multiqc).flatten()
+        if (params.run_differential.toString() == 'true') {
+            differential = DIFFERENTIAL_DSB(analysis.tables, analysis.annotation.collect().ifEmpty([]))
+            analysis_reports = analysis_reports.mix(differential.multiqc)
+        }
     }
     MULTIQC(qc.condition_input.map { meta, summary, header, counts, bam, bai -> summary }.collect(),
             conditions.summary.collect(), qc.samtools_qc.mix(conditions.samtools_qc).flatten().collect(),

@@ -96,7 +96,7 @@ to `samplesheet_to_manifest.py`, then pass the same option to Nextflow.
 Different treatment labels do not make measurements from the same donor
 independent. The workflow records intended designs (`~ donor + condition` or
 `~ condition`) and experimental units in `MultiQC/design.summary.json`,
-`design.metadata.tsv`, and the MultiQC report. It does not fit a differential model.
+`design.metadata.tsv`, and the MultiQC report. Differential fitting is opt-in.
 
 ## Verify the read layout
 
@@ -251,12 +251,87 @@ MultiQC includes a region discovery table. These options can be added on a
 resumed run with the same work directory; use a new output directory to
 preserve previously published results.
 
-**Differential analysis remains unimplemented.** Declared design metadata is
-exported, but no model is fitted. MACS3 q-values describe enrichment under its
-background model, not differences between conditions. Biological replicates
-remain the experimental units for subsequent inference. Low retained molecule
-counts and residual technical artifacts must be considered before interpreting
-hotspots biologically.
+MACS3 q-values describe enrichment under its background model, not differences
+between conditions. Low retained molecule counts and residual technical
+artifacts must be considered before interpreting hotspots biologically.
+
+## Differential relative DSB signal and robustness
+
+Enable an explicit contrast using `--run_differential --design paired
+--contrast CHRONIC,ACUTE` (or `--design unpaired` for independent biological
+samples), together with windows and/or a GTF. The manifest must explicitly
+identify donors for paired analysis. At least three biological samples per
+contrast condition are required; technical libraries are unsupported.
+The numerator is first: positive effects indicate CHRONIC > ACUTE in this
+example. Other conditions are not pooled into either contrast group.
+
+The optional module needs R and DESeq2 in the active environment. Check first:
+
+```bash
+Rscript --vanilla -e 'stopifnot(requireNamespace("DESeq2", quietly=TRUE)); packageVersion("DESeq2")'
+```
+
+If absent, add the optional dependencies to the existing environment using
+`conda env update -n helixbusters -f environment.differential.yml` without
+`--prune`. The workflow checks DESeq2 before upstream processing when enabled;
+ordinary mapping/reporting runs have no new R dependency.
+
+`Analysis/Differential/` contains one subdirectory for each window width and
+for promoter/gene-body counts, when available. DESeq2 fits a negative-binomial
+Wald model to **integer per-sample molecule counts**, with `~ donor + condition`
+for paired samples or `~ condition` for independent samples. The abundance
+filter is >=5 molecules in >=2 samples, regardless of condition; customize with
+`--differential_min_count` and `--differential_min_samples`. Families with fewer
+than 20 eligible features are explicitly skipped. Primary normalization uses
+DESeq2 `poscounts` size factors estimated within each family; a separate fit
+using total retained library molecules is a normalization sensitivity check.
+No gene length normalization is applied to the model: the same feature's length
+is constant across samples. Densities remain descriptive annotation columns.
+
+- `results.tsv`: complete feature universe, raw counts, eligibility, unshrunk
+  log2 fold change, standard error, p-value, BH FDR, dispersion, Cook's distance,
+  convergence and robustness diagnostics.
+- `significant.tsv` and `CONDITION.higher_relative_signal.tsv`: primary FDR
+  <=0.05 results, with the corresponding effect direction for condition lists.
+- `dispersion_fit.pdf`, `diagnostics.{pdf,png}`, size factors, model logs,
+  warnings and `sessionInfo.txt`: inspect before biological interpretation.
+- Equal-depth support frequencies: 50 seeded molecule subsamples without
+  replacement to the smallest library, including molecules outside each
+  feature family in a residual category. Support means >=2 molecules in >=2
+  biological samples within a condition; frequencies are not p-values.
+- For paired samples, donor-specific CPM log ratios and leave-one-donor-out
+  median ratios: descriptive influence diagnostics, without model refitting.
+
+Set `--differential_fdr`, `--robustness_iterations` and `--robustness_seed` when
+needed. Missing p-values are not evidence of no effect. BH correction is **within
+each feature family**, not across all widths and contexts. Declare a primary
+family (for example 10-kb windows) before interpreting the others as sensitivity
+analyses. MACS consensus regions are excluded from these tests because discovery
+uses the same samples; combined gene counts are excluded as an overlapping
+alternative to promoter/gene-body summaries. This module does not establish
+absolute DSB burden per cell or enrichment over a matched genomic background.
+Normalization assumptions and disagreement between the two fits remain material
+limitations; three donor pairs provide limited statistical power.
+
+To analyze an existing run without remapping:
+
+```bash
+python scripts/differential_dsb.py \
+  --analysis-dir /path/to/completed/Analysis \
+  --outdir /path/to/new/Differential \
+  --metadata /path/to/confirmed_paired_metadata.tsv \
+  --design paired --contrast CHRONIC ACUTE
+```
+
+Metadata must contain `sample`, `group`, `replicate`, `donor` and match all source
+samples, conditions and replicate labels. It can supply previously absent donor
+identities, but cannot silently change groups, replicate labels or already
+declared donors. Original
+inputs are read-only; an existing output directory is refused. The reusable
+Slurm wrapper `scripts/run_dsb_comparison.sh` requests 1 CPU/8 GB/4 hours.
+MultiQC receives the differential summary during full workflow execution;
+standalone comparisons write the corresponding custom-content JSON for a later
+MultiQC run.
 
 ## GTF annotation and DSB feature allocation
 
@@ -373,7 +448,7 @@ needed. Mappability and read-span-dependent loss near blacklist boundaries
 are not modeled. Effective length is a point-based descriptive opportunity,
 not a fully calibrated callable genome or enrichment background.
 
-For the same gene in ACUTE and CHRONIC, length is constant. A future differential
+For the same gene in ACUTE and CHRONIC, length is constant. The differential
 model must use preserved integer counts, not length-divided densities.
 
 These are descriptive DSB-associated gene candidates, not differentially

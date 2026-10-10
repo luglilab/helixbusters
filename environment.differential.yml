@@ -1,0 +1,8 @@
+# Optional additions to the existing helixbusters environment; do not use --prune.
+name: helixbusters
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base>=4.3,<5
+  - bioconductor-deseq2>=1.42,<2
