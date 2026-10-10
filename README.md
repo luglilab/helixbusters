@@ -114,43 +114,9 @@ first records of each file, not a random sample or a complete read count. See
 
 ## Preparation, mapping and molecule counting
 
-MACS3 threshold sensitivity can be run without remapping using
-`scripts/compare_peak_qvalues.py --source COMPLETED_OUTPUT --outdir NEW_OUTPUT
---qvalues 0.05 0.10`. It reuses jointly deduplicated molecules and the source
-peak width, effective genome size and background setting. Each threshold has
-independent outputs and a consensus requiring at least two biological replicates
-within each condition. Do not pool discoveries across thresholds as one FDR set.
-Peak-enabled runs also write `Analysis/PeakOverlap` with a condition UpSet in
-PNG/PDF, genomic membership BED, intersection segment counts and covered bases.
-The standalone comparison places these in `q_*/PeakOverlap`. Partial overlaps
-are split into disjoint segments with exact condition membership; adjacent
-intervals do not overlap. Unique segments mean condition-specific detection,
-not statistically significant differential DSB signal. Empty sets are reported
-explicitly. A replicate consensus does not itself establish a consensus-level FDR.
-
-The final BAM sensitivity test is available through
-`scripts/compare_bam_peak_qvalues.py --source COMPLETED_OUTPUT --outdir NEW_OUTPUT`.
-It selects one strict accepted single-end alignment carrying the root UMI of each
-existing directional family, verifies the original molecule total and writes new
-indexed molecular BAMs. It runs `macs3 callpeak -f BAM -g hs --nomodel --extsize 80
---keep-dup all` separately at q=0.05 and q=0.10, with default shift 0, local
-background and default peak merging parameters. Each branch has consensus >=2
-replicates and `Analysis/PeakOverlap`. This changes several peak-model settings
-and is an exploratory sensitivity test, not an isolated comparison of BAM/BED
-format. Raw mapped BAMs must not be substituted: they retain PCR duplicates and
-reads with ambiguous DSB ends. No mapping or molecular deduplication is rerun.
-
-The MACS3-only clipping branch adds `--accept-five-prime-clipping` to that script.
-It requires source BAMs with canonical chromosomes only, mitochondrial/blacklist
-exclusion and MAPQ >=20. Primary records with nonempty XA or NH>1 are removed;
-absence of these tags does not establish perfect genomic uniqueness. UMIs are
-regrouped directionally by aligned boundary and strand, accepting ambiguous
-5-prime ends without extrapolating clipped sequence. Spliced alignments remain
-excluded. A strict control uses the same multimapping exclusions, and
-`clipping_branch.QC.json` records both controls and the source molecular totals.
-New molecular BAMs feed q=0.05/0.10 MACS3, consensus >=2 donors and UpSet.
-Original gene/window counts, annotations and differential models are unchanged.
-These peaks represent mapped-read enrichment with reduced DSB-end specificity.
+MACS3 peak calling has been removed from the main Nextflow workflow. The former
+peak-comparison scripts remain available only as historical standalone diagnostics;
+MACS3 is no longer a dependency of the main environment specification.
 
 `EXTRACT_UMI` runs `scripts/prepare_bliss_reads.py` automatically. It requires
 an exact barcode immediately after the initial UMI, removes both, and retains
@@ -188,7 +154,7 @@ its nucleotide sequence. Keep a run without recovery for sensitivity comparisons
 
 For paired EXP1, use BWA and an explicit donor-paired design. Prefer 50 kb windows
 for the main regional analysis, 100 kb for sensitivity and 10 kb for exploration.
-Interpret MACS3 consensus peaks as exploratory. Report gene-body and promoter
+Interpret window-support intersections as descriptive. Report gene-body and promoter
 counts separately, with effective length and per-kb density alongside raw burden.
 Density rankings are descriptive; differential testing uses integer counts and
 the paired model. Report effect sizes, uncertainty and FDR, and flag candidates
@@ -246,74 +212,57 @@ existing output filenames.
 
 ## Downstream analysis status
 
-Optional genomic windows and MACS3 hotspots are available in `main.nf`:
+Genomic windows and their replicate-supported overlap are available in `main.nf`:
 
 ```bash
-# Append to the usual Nextflow command; both options default to false.
---run_windows --window_sizes 1000,5000,10000 \
---run_peak_calling --min_reps_consensus 2 --peak_width 100 --peak_qvalue 0.01
+--run_windows true --window_sizes 10000,50000,100000 \
+--run_window_upset true --window_min_molecules 5 --window_min_reps 2
 ```
 
-Windows use raw integer molecular end counts, independently deduplicated per
-sample. Only bins observed in at least one sample are exported; other samples
-receive zero for these bins. Bins are anchored at coordinate zero and clipped
-at chromosome ends. `Analysis/windows_<width>.counts.tsv` and `.regions.bed`
-provide a common region universe and retain every sample as a separate column.
-`Analysis/analysis.samples.tsv` records condition, biological replicate and donor.
+Windows preserve raw integer molecular end counts, independently deduplicated
+per sample. Only bins observed in at least one sample are exported; other samples
+receive zero for these bins. Bins are anchored at coordinate zero and clipped at
+chromosome ends. `Analysis/windows_<width>.counts.tsv` and `.regions.bed` provide
+a common counting universe. `analysis.samples.tsv` retains condition, biological
+replicate and donor. Mapping, strict 5-prime acceptance, annotation, gene ranking,
+PCA and differential models are unchanged.
 
-Peak calling requires **MACS3 in the active worker environment**. The project
-environment specification pins MACS3 3.0.5; existing environments require an
-explicit update. Each sample's molecular
-BED6 contains one record per UMI family; MACS3 uses `--nomodel --keep-dup all`
-to preserve independent molecules at identical coordinates. A 100-bp smoothing
-width uses shift -50, extension 100 and minimum peak length/maximum gap 100.
-This is exploratory hotspot discovery without an experimental control; the
-smoothed intervals are not individual break coordinates. Default effective
-genome sizes are 2,913,022,398 for hg38 and 2,652,783,500 for mm10. Other
-assemblies require `--effective_genome_size`; this value is an approximation
-and can be overridden for the reference/read length used.
+With windows enabled, `--run_window_upset` defaults to true. A window belongs to a
+condition when at least `--window_min_reps` biological samples each have at least
+`--window_min_molecules` molecules (defaults: two samples, five molecules). Within
+condition duplicate donor/replicate libraries are rejected. A condition with fewer
+samples than this threshold fails; singleton descriptive analysis requires setting
+`--window_min_reps 1` explicitly.
 
-For a sensitivity comparison without a control, add `--peak_nolambda` to
-forward `--nolambda` to MACS3 and use the global background instead of local
-lambda. It defaults to false. This can expose regional background biases;
-additional calls are not evidence of biological specificity. Keep the same
-q-value, smoothing and consensus threshold and use a separate output directory.
-The exact command and background choice are recorded in provenance and
-`Analysis/analysis.summary.json`. See the
-[MACS3 documentation](https://macs3-project.github.io/MACS/docs/callpeak.html).
-For sparse datasets, `--window_sizes 1000,5000,10000,50000,100000` also exports
-50- and 100-kb windows without changing the MACS3 smoothing width.
+`Analysis/WindowOverlap/windows_<width>/full_depth` contains an UpSet PNG/PDF,
+intersection TSV and condition set-size TSV. The equal-depth panel uses 50
+without-replacement draws to the smallest molecular library and requires support
+in at least 80% of draws. `--robustness_iterations` and `--robustness_seed` control
+the draws; the default seed is 1729. This reuses the differential module's
+sampling method without fitting another model. Zero-depth libraries retain the
+full-depth panel but skip equal-depth sampling. Fixed bins are never merged,
+including adjacent bins, and are matched by chromosome/start/end. Each width has
+its own comparison; do not combine widths into independent discoveries.
 
-Per-sample peaks, logs and provenance appear in `SingleReplicate/<sample>/peaks`.
-`MergedReplicate/<condition>/peaks/<condition>.consensus.bed` contains exact
-segments supported by at least `--min_reps_consensus` distinct biological
-replicates of that condition. Its six columns are chromosome, start, end,
-identifier, support count and comma-separated supporting samples (the last
-column is not a strand). Overlap chains do not count as support across the
-whole union. A condition with fewer replicates than the threshold fails before
-mapping; use threshold 1 explicitly for descriptive singleton analysis.
-Conditions are discovered independently and are never used as MACS3 controls
-for each other. Their consensus intervals form a disjoint common universe in
-`Analysis/peaks_consensus.{regions.bed,counts.tsv}` for counting all samples.
+`window_membership.tsv` records integer sample counts, CPM, number of supporting
+replicates, condition membership and equal-depth support frequencies. The summary
+JSON records input hashes, thresholds and library totals; MultiQC includes an
+overlap table. Empty sets are displayed explicitly. Support, shared membership
+and depth stability are **descriptive**, not statistical enrichment or proof of a
+condition difference. A unique supported window may still contain reads in the
+other condition. Statistical differential results remain in `Analysis/Differential`.
 
-`MACS3_CALLPEAK` runs once per sample, with its own cache, logs, provenance and
-software-version JSON. Its input is the deduplicated molecular BED6 rather
-than a read-coverage BAM; biological pairing does not change this input format.
-Each task requests 1 CPU/8 GB/4 hours under the reporting defaults. Tasks may
-run concurrently according to scheduler availability. The process declares
-`environment.yml` for Nextflow-managed Conda (`-with-conda`); without that flag,
-the existing activated environment is used. No container image is configured.
-The downstream reporting task consumes staged peaks, builds independent
-condition consensus and counts their common regions. Changing window sizes
-alone does not change the per-sample peak-calling task command.
-Region counts and summaries use one separate 1-CPU/8-GB reporting task.
-MultiQC includes a region discovery table. These options can be added on a
-resumed run with the same work directory; use a new output directory to
-preserve previously published results.
+Existing outputs can be reviewed without remapping:
 
-MACS3 q-values describe enrichment under its background model, not differences
-between conditions. Low retained molecule counts and residual technical
-artifacts must be considered before interpreting hotspots biologically.
+```bash
+python scripts/window_upset.py --analysis-dir COMPLETED_OUTPUT/Analysis \
+    --outdir NEW_WINDOW_OVERLAP --windows 10000 50000 100000 \
+    --minimum-molecules 5 --minimum-replicates 2
+```
+
+The main workflow rejects `--run_peak_calling true`; remove old MACS3 arguments
+from launch scripts. The gene support threshold is now independently controlled
+by `--gene_min_reps` (default two); legacy `--min_reps_consensus` is not used.
 
 ## Clipping and molecular-depth diagnostics
 
@@ -550,7 +499,7 @@ GRCh38.p14; [official release page](https://www.gencodegenes.org/human/)).
 --promoter_upstream 2000 --promoter_downstream 500
 ```
 
-Annotation can run with or without window analysis and peak calling. It uses
+Annotation can run with or without window analysis. It uses
 retained deduplicated 1-bp DSB ends, not read-coverage BAMs or window midpoints.
 GTF coordinates are converted from 1-based inclusive to 0-based half-open;
 standard `chr1`/`1` aliases are matched without rewriting gene IDs or output
@@ -573,7 +522,7 @@ Outputs under `Analysis/Annotation` include:
 
 - Per-sample DSB site annotations with molecular counts, associated gene IDs,
   gene names and biotypes.
-- Window and peak annotations with exact exclusive feature coverage in bp,
+- Window annotations with exact exclusive feature coverage in bp,
   a dominant feature and a mixed-feature flag. A wide interval can overlap
   several genes/features; gene association does not imply functional targeting.
 - Molecule counts and percentages per sample; exon-plus-intron gene-body totals.
@@ -611,7 +560,7 @@ Condition summaries give biological samples equal weight. Zero-depth samples
 have undefined CPM and are excluded from normalized condition summaries.
 
 By default, a candidate requires at least `--gene_min_molecules 2` in at least
-`--min_reps_consensus` biological samples of that condition (default two).
+`--gene_min_reps` biological samples of that condition (default two).
 Use `--gene_min_reps` to set an independent gene-support threshold. A group
 with too few replicates has an empty candidate list; thresholds are never
 silently relaxed. Rankings place supported candidates first, then sort by

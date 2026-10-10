@@ -55,7 +55,7 @@ The worker preflight validates design before extraction/mapping, writes
 units in a dedicated MultiQC table. Donor metadata is also propagated in workflow
 sample metadata. Formulas `~ donor + condition` and `~ condition` are recorded
 as intended designs, not fitted models. This change does not implement differential
-analysis, MACS3, or consensus peaks; condition merging remains by `group` for both
+analysis or supported-window overlap; condition merging remains by `group` for both
 designs, and biological replicate support must remain distinct from donor pairing.
 
 The workflow uses a tab-separated manifest rather than reading Excel inside
@@ -412,13 +412,14 @@ executes library QC, independently deduplicated end tracks, a condition BAM
 merge, deepTools coverage and a combined MultiQC report. It does not use human
 experimental data or claim to validate read alignment against hg38.
 
-Optional downstream analysis: add `--run_windows --window_sizes 1000,5000,10000`
-for sparse integer molecule matrices, and/or `--run_peak_calling
---min_reps_consensus 2` for per-sample MACS3 hotspots and condition consensus.
-MACS3 must be available on workers only when peak calling is enabled.
-See README downstream analysis for smoothing, effective genome size, output
-locations and statistical limits. These discovery steps do not fit a
-differential model. To enable a separate relative DSB comparison, add
+Optional downstream analysis: add `--run_windows true --window_sizes 10000,50000,100000`
+for integer molecule matrices. MACS3 peak calling has been removed from the main
+workflow. Window UpSet plots are enabled by default with windows; tune
+`--window_min_molecules 5 --window_min_reps 2` for descriptive replicate support.
+Outputs in `Analysis/WindowOverlap` include full-depth and equal-depth panels,
+exact bin memberships and input provenance. Supported windows are not
+statistically enriched or differential by this rule.
+To enable a separate relative DSB comparison, add
 `--run_differential --design paired --contrast CHRONIC,ACUTE`, with explicit
 `donor` metadata in the manifest and at least three biological samples per
 contrast condition. Use `--design unpaired` for independent samples. This
@@ -429,11 +430,6 @@ The README documents normalization assumptions and within-family FDR.
 For preserved outputs with previously unspecified pairing, use
 `scripts/differential_dsb.py` and confirmed metadata without remapping.
 
-Peak calling now uses one `MACS3_CALLPEAK` task per sample, followed by the
-consensus/counting reporting task. Inputs remain independently deduplicated
-1-bp molecular BED6 records; `BAMPE` fragment coverage is not substituted for
-BLISS ends. `--peak_nolambda` changes the per-sample MACS3 background.
-The process declares the pinned project `environment.yml` for `-with-conda`;
-default runs continue to use the activated environment. Container execution
-has not been configured or validated. Per-sample outputs include narrowPeak,
-XLS, summits, log, provenance and software-version JSON.
+Historical standalone MACS3 diagnostics remain in scripts, but are not called by
+`main.nf` and are not required by the main environment. Remove old peak flags from
+launch scripts; `--run_peak_calling true` fails explicitly.

@@ -20,5 +20,4 @@ dependencies:
   - deeptools>=3.5,<4
   - pybigwig>=0.3.22,<0.4
   - multiqc>=1.25,<2
-  - macs3=3.0.5
   - pip

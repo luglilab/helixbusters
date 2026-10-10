@@ -27,15 +27,13 @@ params.gtf = null
 params.gtf_genome = null
 params.promoter_upstream = 2000
 params.promoter_downstream = 500
-params.gene_min_reps = null
+params.gene_min_reps = 2
 params.gene_min_molecules = 2
-params.run_peak_calling = false
 params.window_sizes = '1000,5000,10000'
-params.min_reps_consensus = 2
-params.peak_width = 100
-params.peak_qvalue = 0.01
-params.peak_nolambda = false
-params.effective_genome_size = 'auto'
+params.run_window_upset = true
+params.window_min_molecules = 5
+params.window_min_reps = 2
+params.run_peak_calling = false // Legacy false is accepted; true is rejected.
 params.run_differential = false
 params.contrast = null
 params.differential_min_count = 5
@@ -224,46 +222,16 @@ process CONDITION_QC {
     """
 }
 
-process MACS3_CALLPEAK {
-    tag "${meta.sample}"
-    label 'reporting'
-    cpus 1
-    conda "${projectDir}/environment.yml"
-    publishDir { "${params.outdir}/SingleReplicate/${meta.sample}/peaks" }, mode: 'copy'
-
-    input:
-    tuple val(meta), path(counts), path(header), path(molecules)
-
-    output:
-    tuple val(meta), path("${meta.sample}_peaks.narrowPeak"), path("${meta.sample}.provenance.json"), emit: peaks
-    tuple val(meta), path("${meta.sample}_peaks.xls"), emit: xls
-    tuple val(meta), path("${meta.sample}_summits.bed"), emit: bed
-    path "${meta.sample}.versions.json", emit: versions
-    path 'macs3.log', emit: log
-
-    script:
-    def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
-    def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
-        ([hg38: 2913022398L, mm10: 2652783500L][params.genome] ?: 1) : params.effective_genome_size
-    """
-    python ${projectDir}/scripts/call_bliss_peaks.py \\
-        --sample '${meta.sample}' --counts '${counts}' --header '${header}' --molecules '${molecules}' \\
-        --peak-width '${params.peak_width}' --peak-qvalue '${params.peak_qvalue}' \\
-        --effective-genome-size '${effectiveSize}' ${background}
-    """
-}
-
 process ANALYZE_REGIONS {
     label 'reporting'
     cpus 1
-    publishDir "${params.outdir}", mode: 'copy', pattern: '{SingleReplicate,MergedReplicate}/**'
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: '*.{tsv,bed,json}'
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'PCA'
     publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'Annotation'
-    publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'PeakOverlap'
+    publishDir "${params.outdir}/Analysis", mode: 'copy', pattern: 'WindowOverlap'
 
     input:
-    tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*'), path(peak_files), path(peak_provenance)
+    tuple val(samples), path(counts, arity: '1..*'), path(headers, arity: '1..*'), path(molecules, arity: '1..*')
     path design_files, arity: '1..*'
     path annotation_gtf, stageAs: 'annotation_reference/*'
     path annotation_environment
@@ -274,35 +242,28 @@ process ANALYZE_REGIONS {
     path 'PCA', optional: true, emit: pca
     path 'PCA/pca_mqc.json', optional: true, emit: pca_multiqc
     path 'Annotation', optional: true, emit: annotation
-    path 'PeakOverlap', optional: true, emit: peak_overlap
+    path 'WindowOverlap', optional: true, emit: window_overlap
+    path 'WindowOverlap/window_upset_mqc.json', optional: true, emit: window_overlap_multiqc
     path 'Annotation/*_mqc.json', optional: true, emit: annotation_multiqc
-    path 'SingleReplicate/*/peaks/*', optional: true
-    path 'MergedReplicate/*/peaks/*', optional: true
 
     script:
     def sampleArgs = samples.collect { "'${it}'" }.join(' ')
     def countArgs = counts.collect { "'${it}'" }.join(' ')
     def headerArgs = headers.collect { "'${it}'" }.join(' ')
     def moleculeArgs = molecules.collect { "'${it}'" }.join(' ')
-    def externalPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') +
-        ' --peak-provenance ' + peak_provenance.collect { "'${it}'" }.join(' ') : ''
     def windows = params.run_windows.toString() == 'true' ? params.window_sizes : ''
     def pcaCommand = windows && params.run_pca.toString() == 'true' ?
         "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/pca_windows.py --analysis-dir . --outdir PCA --windows ${windows.toString().split(',').join(' ')}" : ''
-    def annotationPeaks = peak_files ? '--peak-files ' + peak_files.collect { "'${it}'" }.join(' ') : ''
-    def geneMinimumReps = params.gene_min_reps != null ? params.gene_min_reps : params.min_reps_consensus
+    def geneMinimumReps = params.gene_min_reps != null ? params.gene_min_reps : 2
     def annotationCommand = annotation_gtf ?
-        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --environment-file '${annotation_environment}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --gene-min-reps '${geneMinimumReps}' --gene-min-molecules '${params.gene_min_molecules}' --analysis-dir . --outdir Annotation ${annotationPeaks}" : ''
-    def peaks = params.run_peak_calling.toString() == 'true' ? '--peaks' : ''
-    def background = params.peak_nolambda.toString() == 'true' ? '--nolambda' : ''
-    def effectiveSize = params.effective_genome_size.toString() == 'auto' ?
-        ([hg38: 2913022398L, mm10: 2652783500L][params.genome] ?: 1) : params.effective_genome_size
+        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/annotate_regions.py --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --design-file design.summary.json --gtf '${annotation_gtf}' --gtf-genome '${params.gtf_genome}' --genome '${params.genome}' --environment-file '${annotation_environment}' --promoter-upstream '${params.promoter_upstream}' --promoter-downstream '${params.promoter_downstream}' --gene-min-reps '${geneMinimumReps}' --gene-min-molecules '${params.gene_min_molecules}' --analysis-dir . --outdir Annotation" : ''
+    def overlapCommand = windows && params.run_window_upset.toString() == 'true' ?
+        "env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python ${projectDir}/scripts/window_upset.py --analysis-dir . --outdir WindowOverlap --windows ${windows.toString().split(',').join(' ')} --minimum-molecules '${params.window_min_molecules}' --minimum-replicates '${params.window_min_reps}' --iterations '${params.robustness_iterations}' --seed '${params.robustness_seed}'" : ''
     """
     python ${projectDir}/scripts/analyze_regions.py \\
         --samples ${sampleArgs} --counts ${countArgs} --headers ${headerArgs} --molecules ${moleculeArgs} \\
-        --design-file design.summary.json --windows '${windows}' ${peaks} ${background} ${externalPeaks} \\
-        --min-reps-consensus '${params.min_reps_consensus}' --peak-width '${params.peak_width}' \\
-        --peak-qvalue '${params.peak_qvalue}' --effective-genome-size '${effectiveSize}'
+        --design-file design.summary.json --windows '${windows}'
+    ${overlapCommand}
     ${pcaCommand}
     ${annotationCommand}
     """
@@ -386,27 +347,19 @@ workflow {
             error "--${key} must be a positive integer"
         }
     }
-    if (params.effective_genome_size.toString() == 'auto') {
-        if (params.run_peak_calling.toString() == 'true' && !(params.genome in ['hg38', 'mm10'])) {
-            error 'Provide --effective_genome_size for peak calling with this genome assembly'
-        }
-    } else if (!(params.effective_genome_size.toString() ==~ /[1-9][0-9]*/)) {
-        error '--effective_genome_size must be auto or a positive integer'
+    if (params.run_peak_calling.toString() != 'false') {
+        error 'MACS3 peak calling has been removed from main.nf; use window support and --run_window_upset instead'
     }
-    ['run_windows', 'run_pca', 'run_peak_calling', 'peak_nolambda', 'run_differential'].each { key ->
+    ['run_windows', 'run_pca', 'run_window_upset', 'run_differential'].each { key ->
         if (!(params[key].toString() in ['true', 'false'])) { error "--${key} must be true or false" }
     }
     if (!(params.window_sizes.toString() ==~ /[1-9][0-9]*(,[1-9][0-9]*)*/)) {
         error '--window_sizes must be comma-separated positive integers'
     }
-    ['min_reps_consensus', 'peak_width'].each { key ->
+    ['window_min_molecules', 'window_min_reps'].each { key ->
         if (!(params[key].toString() ==~ /[1-9][0-9]*/) || params[key].toLong() > Integer.MAX_VALUE) {
             error "--${key} must be a positive integer"
         }
-    }
-    if ((params.peak_width as Integer) % 2 != 0) { error '--peak_width must be even' }
-    if (!(params.peak_qvalue.toString() ==~ /[0-9.eE+-]+/) || (params.peak_qvalue as Double) <= 0 || (params.peak_qvalue as Double) >= 1) {
-        error '--peak_qvalue must be between 0 and 1'
     }
     ['map_threads', 'umi_length', 'coverage_bin_size', 'minimum_insert_length'].each { key ->
         if (!(params[key].toString() ==~ /[1-9][0-9]*/) || params[key].toLong() > Integer.MAX_VALUE) {
@@ -476,9 +429,9 @@ workflow {
                     error '--run_differential requires >=3 biological samples per contrast condition'
                 }
             }
-            if (params.run_peak_calling.toString() == 'true' &&
-                rows.groupBy { it.group }.any { group, members -> members.size() < (params.min_reps_consensus as Integer) }) {
-                error '--min_reps_consensus exceeds the biological replicate count of a condition'
+            if (params.run_windows.toString() == 'true' && params.run_window_upset.toString() == 'true' &&
+                rows.groupBy { it.group }.any { group, members -> members.size() < (params.window_min_reps as Integer) }) {
+                error '--window_min_reps exceeds the biological replicate count of a condition'
             }
             def seenSamples = [] as Set
             def seenReplicates = [] as Set
@@ -520,25 +473,19 @@ workflow {
         }
     conditions = CONDITION_QC(grouped)
     analysis_reports = Channel.empty()
-    if (params.run_windows.toString() == 'true' || params.run_peak_calling.toString() == 'true' || params.gtf) {
+    if (params.run_windows.toString() == 'true' || params.gtf) {
         region_inputs = qc.condition_input
             .map { meta, summary, header, counts, bam, bai -> tuple(meta, counts, header) }
             .join(dedup.molecules)
-        if (params.run_peak_calling.toString() == 'true') {
-            calls = MACS3_CALLPEAK(region_inputs)
-            region_inputs = region_inputs.join(calls.peaks)
-        }
         region_inputs = region_inputs
             .collect(flat: false)
             .map { rows ->
                 def ordered = rows.sort { a, b -> a[0].sample <=> b[0].sample }
                 tuple(ordered.collect { it[0].sample }, ordered.collect { it[1] },
-                      ordered.collect { it[2] }, ordered.collect { it[3] },
-                      ordered.collect { it.size() > 4 ? it[4] : null }.findAll { it != null },
-                      ordered.collect { it.size() > 5 ? it[5] : null }.findAll { it != null })
+                      ordered.collect { it[2] }, ordered.collect { it[3] })
             }
         analysis = ANALYZE_REGIONS(region_inputs, environment.design_metadata.flatten().collect(), annotation_reference, environment.ready)
-        analysis_reports = analysis.multiqc.mix(analysis.pca_multiqc, analysis.annotation_multiqc).flatten()
+        analysis_reports = analysis.multiqc.mix(analysis.pca_multiqc, analysis.annotation_multiqc, analysis.window_overlap_multiqc).flatten()
         if (params.run_differential.toString() == 'true') {
             differential = DIFFERENTIAL_DSB(analysis.tables, analysis.annotation.collect().ifEmpty([]))
             analysis_reports = analysis_reports.mix(differential.multiqc)
