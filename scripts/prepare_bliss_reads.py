@@ -1,17 +1,35 @@
 #!/usr/bin/env python3
-"""Extract anchored BLISS UMIs and report exclusive preparation outcomes."""
+"""Extract anchored BLISS UMIs with parallel pigz output compression.
 
+The biological filtering logic and QC schema match the original implementation.
+"""
 import argparse
 from collections import Counter
 import gzip
+import io
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helixbusters.technical import prefix_distance, full_t7_rescue_reason, T7_REVERSE
 
 
-def prepare(reads, sample, barcode, orientation, umi_length, min_length, technical_prefix, outdir, technical_prefix_max_errors=0, exact20_rescue=False):
+def default_threads():
+    """Reserve two allocated cores for Python/input decompression where possible."""
+    try:
+        allocated = int(os.environ.get('SLURM_CPUS_PER_TASK', '2'))
+    except ValueError:
+        allocated = 2
+    return max(1, allocated - 2)
+
+
+def prepare(reads, sample, barcode, orientation, umi_length, min_length,
+            technical_prefix, outdir, technical_prefix_max_errors=0,
+            exact20_rescue=False, threads=None):
     if exact20_rescue and technical_prefix != T7_REVERSE[:18]:
         raise ValueError('Exact20 rescue requires technical prefix CCCTATAGTGAGTCGTAT')
     if not barcode or set(barcode) - set('ACGT'):
@@ -24,6 +42,13 @@ def prepare(reads, sample, barcode, orientation, umi_length, min_length, technic
         raise ValueError('Technical prefix must contain at least 12 A/C/G/T bases, or be empty')
     if technical_prefix_max_errors not in {0, 1, 2} or (technical_prefix_max_errors and not technical_prefix):
         raise ValueError('Technical-prefix errors must be 0, 1 or 2; a motif is required for tolerant matching')
+    if threads is None:
+        threads = default_threads()
+    if threads < 1:
+        raise ValueError('pigz threads must be >= 1')
+    if not shutil.which('pigz'):
+        raise OSError('pigz not found in PATH; activate an environment containing pigz 2.8')
+
     observed_barcode = barcode if orientation == 'forward' else barcode.translate(str.maketrans('ACGT', 'TGCA'))[::-1]
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -32,56 +57,79 @@ def prepare(reads, sample, barcode, orientation, umi_length, min_length, technic
     custom = outdir / f'{sample}.preparation_mqc.json'
     if any(p.exists() for p in (fastq, qc, custom)):
         raise ValueError('Preparation outputs already exist; use a new directory')
+
     counts = Counter({key: 0 for key in ('input_reads', 'barcode_mismatch_reads', 'invalid_umi_reads',
-                                       'technical_prefix_reads', 'short_insert_reads', 'output_reads')})
+                                        'technical_prefix_reads', 'short_insert_reads', 'output_reads')})
     opener = gzip.open if str(reads).lower().endswith('.gz') else open
     end = umi_length + len(barcode)
     rescued_reads = 0
     rescue_exclusions = Counter()
-    with opener(reads, 'rt', encoding='ascii') as source, fastq.open('xb') as raw:
-        # Fixed gzip timestamp makes the compressed output reproducible.
-        with gzip.GzipFile(fileobj=raw, mode='wb', filename='', mtime=0) as destination:
-            while True:
-                header = source.readline()
-                if not header:
-                    break
-                header = header.rstrip('\r\n')
-                sequence = source.readline().rstrip('\r\n').upper()
-                plus = source.readline().rstrip('\r\n')
-                quality = source.readline().rstrip('\r\n')
-                counts['input_reads'] += 1
-                if (not header.startswith('@') or not plus.startswith('+') or not sequence or
-                        len(sequence) != len(quality) or set(sequence) - set('ACGTN')):
-                    raise ValueError(f'Malformed FASTQ record {counts["input_reads"]}')
-                if sequence[umi_length:end] != observed_barcode:
-                    counts['barcode_mismatch_reads'] += 1
-                    continue
-                umi = sequence[:umi_length]
-                if len(umi) != umi_length or set(umi) - set('ACGT'):
-                    counts['invalid_umi_reads'] += 1
-                    continue
-                insert = sequence[end:]
-                insert_quality = quality[end:]
-                if technical_prefix and prefix_distance(insert, technical_prefix, technical_prefix_max_errors) <= technical_prefix_max_errors:
-                    reason = full_t7_rescue_reason(insert, insert_quality) if exact20_rescue else 'disabled'
-                    if reason is None:
-                        insert, insert_quality = insert[20:], insert_quality[20:]
-                        rescued_reads += 1
-                    else:
-                        counts['technical_prefix_reads'] += 1
-                        if exact20_rescue:
-                            rescue_exclusions[reason] += 1
-                        continue
-                if len(insert) < min_length:
-                    counts['short_insert_reads'] += 1
-                    continue
-                identifier, *description = header.split(maxsplit=1)
-                new_header = identifier + '_' + umi + (' ' + description[0] if description else '')
-                destination.write(f'{new_header}\n{insert}\n+\n{insert_quality}\n'.encode('ascii'))
-                counts['output_reads'] += 1
+    proc = None
+    try:
+        # pigz -n suppresses timestamp and filename, matching reproducible gzip header intent.
+        with opener(reads, 'rt', encoding='ascii') as source, fastq.open('xb') as raw:
+            proc = subprocess.Popen(['pigz', '-p', str(threads), '-n', '-c'],
+                                    stdin=subprocess.PIPE, stdout=raw, stderr=subprocess.PIPE)
+            try:
+                with io.BufferedWriter(proc.stdin, buffer_size=4 * 1024 * 1024) as destination:
+                    while True:
+                        header = source.readline()
+                        if not header:
+                            break
+                        header = header.rstrip('\r\n')
+                        sequence = source.readline().rstrip('\r\n').upper()
+                        plus = source.readline().rstrip('\r\n')
+                        quality = source.readline().rstrip('\r\n')
+                        counts['input_reads'] += 1
+                        if (not header.startswith('@') or not plus.startswith('+') or not sequence or
+                                len(sequence) != len(quality) or set(sequence) - set('ACGTN')):
+                            raise ValueError(f'Malformed FASTQ record {counts["input_reads"]}')
+                        if sequence[umi_length:end] != observed_barcode:
+                            counts['barcode_mismatch_reads'] += 1
+                            continue
+                        umi = sequence[:umi_length]
+                        if len(umi) != umi_length or set(umi) - set('ACGT'):
+                            counts['invalid_umi_reads'] += 1
+                            continue
+                        insert = sequence[end:]
+                        insert_quality = quality[end:]
+                        if technical_prefix and prefix_distance(insert, technical_prefix, technical_prefix_max_errors) <= technical_prefix_max_errors:
+                            reason = full_t7_rescue_reason(insert, insert_quality) if exact20_rescue else 'disabled'
+                            if reason is None:
+                                insert, insert_quality = insert[20:], insert_quality[20:]
+                                rescued_reads += 1
+                            else:
+                                counts['technical_prefix_reads'] += 1
+                                if exact20_rescue:
+                                    rescue_exclusions[reason] += 1
+                                continue
+                        if len(insert) < min_length:
+                            counts['short_insert_reads'] += 1
+                            continue
+                        identifier, *description = header.split(maxsplit=1)
+                        new_header = identifier + '_' + umi + (' ' + description[0] if description else '')
+                        destination.write(f'{new_header}\n{insert}\n+\n{insert_quality}\n'.encode('ascii'))
+                        counts['output_reads'] += 1
+                stderr = proc.stderr.read().decode('utf-8', errors='replace')
+                status = proc.wait()
+                if status:
+                    raise OSError(f'pigz failed (exit {status}): {stderr.strip()}')
+            except BaseException:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+                raise
+            finally:
+                proc.stderr.close()
+    except BaseException:
+        # A failed step must not leave a truncated FASTQ that looks like valid output.
+        fastq.unlink(missing_ok=True)
+        raise
+
     parameters = {'barcode': barcode, 'observed_barcode': observed_barcode,
                   'barcode_orientation': orientation, 'umi_length': umi_length,
-                  'minimum_insert_length': min_length, 'excluded_exact_technical_prefix': technical_prefix if technical_prefix_max_errors == 0 else None,
+                  'minimum_insert_length': min_length,
+                  'excluded_exact_technical_prefix': technical_prefix if technical_prefix_max_errors == 0 else None,
                   'technical_prefix': technical_prefix, 'technical_prefix_max_errors': technical_prefix_max_errors,
                   'barcode_match': 'exact, anchored immediately after UMI; no mismatch rescue',
                   'technical_filter': 'exclude entire read by anchored motif edit distance; substitutions/insertions/deletions; no fixed trimming'}
@@ -118,12 +166,15 @@ def main():
     parser.add_argument('--technical-prefix', default='')
     parser.add_argument('--technical-prefix-max-errors', type=int, choices=(0, 1, 2), default=0)
     parser.add_argument('--exact20-rescue', action='store_true', help='Opt-in experimentally tested exact20 preparation; confirm assay adapter junction first')
+    parser.add_argument('--pigz-threads', type=int, default=None,
+                        help='pigz compression threads; default max(1, SLURM_CPUS_PER_TASK - 2)')
     parser.add_argument('--outdir', default='.')
     args = parser.parse_args()
     if not args.sample or any(c in args.sample for c in '/\\\t\r\n') or args.sample in {'.', '..'}:
         parser.error('Invalid sample identifier')
     prepare(args.reads, args.sample, args.barcode.upper(), args.barcode_orientation, args.umi_length,
-            args.minimum_insert_length, args.technical_prefix.upper(), args.outdir, args.technical_prefix_max_errors, args.exact20_rescue)
+            args.minimum_insert_length, args.technical_prefix.upper(), args.outdir,
+            args.technical_prefix_max_errors, args.exact20_rescue, args.pigz_threads)
 
 
 if __name__ == '__main__':
